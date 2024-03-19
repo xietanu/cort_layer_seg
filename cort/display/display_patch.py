@@ -11,6 +11,7 @@ def display_patch(patch_img: np.ndarray, patch_mask: np.ndarray, ax=None):
         ax = plt.gca()
 
     img = np.stack([patch_img, patch_img, patch_img], axis=-1)
+    img = ((img + 1) / 2 * 255).astype(np.uint8)
 
     for i, colour in enumerate(cort.constants.COLOURS):
         img[patch_mask == i] = (
