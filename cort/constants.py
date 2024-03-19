@@ -9,3 +9,5 @@ COLOURS = [
     (255, 255, 255), # White, WM
     (0, 0, 0) # Black, Padding
 ]
+
+PADDING_MASK_VALUE = 8
