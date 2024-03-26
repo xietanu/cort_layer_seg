@@ -25,4 +25,8 @@ def pad_patch(
         section_id=patch.section_id,
         patch_id=patch.patch_id,
         brain_area=patch.brain_area,
+        x=patch.x,
+        y=patch.y,
+        z=patch.z,
+        region_probs=patch.region_probs,
     )

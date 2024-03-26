@@ -19,6 +19,10 @@ class CorticalPatch:
     section_id: int
     patch_id: int
     brain_area: str
+    x: int
+    y: int
+    z: int
+    region_probs: np.ndarray
 
     @property
     def shape(self):
