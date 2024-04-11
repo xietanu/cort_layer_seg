@@ -4,6 +4,7 @@ import torch.utils.data
 import torchvision
 
 import cort
+import datasets.protocols
 
 
 class PatchDataset(torch.utils.data.Dataset):
@@ -13,16 +14,18 @@ class PatchDataset(torch.utils.data.Dataset):
         self,
         patches: list[cort.CorticalPatch],
         transform: torchvision.transforms.Compose,
+        condition: datasets.protocols.Condition | None = None,
         img_transform: torchvision.transforms.Compose | None = None,
     ):
         self.patches = patches
         self.transform = transform
         self.img_transform = img_transform
+        self.condition = condition
 
     def __len__(self) -> int:
         return len(self.patches)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int):
         patch = self.patches[idx]
 
         image_and_label = np.stack((patch.image, patch.mask), axis=-1)
@@ -36,6 +39,16 @@ class PatchDataset(torch.utils.data.Dataset):
 
         if self.img_transform is not None:
             image = self.img_transform(image)
+
+        if self.condition is not None:
+            condition = self.condition(patch)
+            return (
+                (
+                    image,
+                    condition,
+                ),
+                label,
+            )
 
         return (
             image,

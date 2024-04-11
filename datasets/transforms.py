@@ -22,7 +22,7 @@ AUGMENTATIONS = transforms.Compose(
             [
                 transforms.RandomAffine(
                     degrees=10,
-                    translate=(0.1, 0.1),
+                    translate=(0, 0.1),
                     shear=10,
                     fill=cort.constants.PADDING_MASK_VALUE,
                     interpolation=transforms.InterpolationMode.NEAREST,
@@ -33,7 +33,7 @@ AUGMENTATIONS = transforms.Compose(
         # transforms.RandomPerspective(
         #    0.1,
         #    fill=cort.constants.PADDING_MASK_VALUE,
-        #    interpolation=transforms.InterpolationMode.NEAREST,
+        #    interpolation=transforms.InterpolationMode.NEAREST_EXACT,
         # ),
         # transforms.RandomResizedCrop((256, 128), scale=(0.8, 1.0), ratio=(0.75, 1.333)),
     ]
