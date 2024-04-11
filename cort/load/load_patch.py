@@ -2,6 +2,7 @@
 
 import os
 
+import nibabel as nib
 import cv2
 import numpy as np
 
@@ -10,14 +11,19 @@ import cort.load
 
 COORDS_FILENAME = "coords.txt"
 REGION_PROBS_FILENAME = "region_probs.npy"
-IMAGE_FILENAME = "image.png"
+IMAGE_FILENAME = "image.nii.gz"
 MASK_FILENAME = "layermask.png"
 RESOLUTION_KEY = "inplane_resolution_micron"
 
 
 def load_patch(folder_path: str, downscale: float = 1) -> cort.CorticalPatch:
     """Load a CorticalPatch from a folder."""
-    layer, mask = read_image_and_mask(folder_path)
+    image = nib.load(os.path.join(folder_path, IMAGE_FILENAME))
+
+    layer = image.get_fdata()
+    layer = (layer - np.mean(layer)) / np.std(layer)
+
+    mask = cv2.imread(os.path.join(folder_path, MASK_FILENAME), cv2.IMREAD_UNCHANGED)
 
     dscale_layer, dscale_mask = downscale_image_and_mask(layer, mask, downscale)
 
@@ -25,7 +31,7 @@ def load_patch(folder_path: str, downscale: float = 1) -> cort.CorticalPatch:
 
     data[RESOLUTION_KEY] = data[RESOLUTION_KEY] * downscale  # type: ignore
 
-    coords = read_coords(folder_path)
+    coords = image.affine[:3, 3]
 
     region_probs = np.load(os.path.join(folder_path, REGION_PROBS_FILENAME))
 
@@ -38,19 +44,6 @@ def load_patch(folder_path: str, downscale: float = 1) -> cort.CorticalPatch:
         region_probs=region_probs,
         **data
     )
-
-
-def read_image_and_mask(folder_path):
-    layer = (
-        2
-        * cv2.imread(
-            os.path.join(folder_path, IMAGE_FILENAME), cv2.IMREAD_GRAYSCALE
-        ).astype(np.float32)
-        / 255
-        - 1
-    )
-    mask = cv2.imread(os.path.join(folder_path, MASK_FILENAME), cv2.IMREAD_UNCHANGED)
-    return layer, mask
 
 
 def downscale_image_and_mask(layer: np.ndarray, mask: np.ndarray, downscale: float):

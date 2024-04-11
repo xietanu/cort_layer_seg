@@ -19,10 +19,23 @@ class CorticalPatch:
     section_id: int
     patch_id: int
     brain_area: str
-    x: int
-    y: int
-    z: int
+    x: float
+    y: float
+    z: float
     region_probs: np.ndarray
+    borders: np.ndarray = None
+
+    def __post_init__(self):
+        """Post-initialization."""
+        if self.image.shape != self.mask.shape:
+            raise ValueError("Image and mask must have the same shape.")
+
+        self.borders = np.zeros((7, self.mask.shape[0], self.mask.shape[1]))
+
+        offset_mask = np.roll(self.mask, -1, axis=0)
+
+        for i in range(7):
+            self.borders[i, (self.mask == i) & (offset_mask != i)] = 1
 
     @property
     def shape(self):
