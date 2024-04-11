@@ -12,8 +12,13 @@ TRAIN_CONV = 0
 TRAIN_FILM = 1
 TRAIN_ALL = 2
 
+with torch.no_grad():
+    DEPTH_MULTI = torch.tensor(np.linspace(0, 1, 256)[None, None, :, None]).to(
+        torch.float64
+    )
 
-class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
+
+class ConditionalShiftUNet3PlusModel(nnet.protocols.ModelProtocol):
     """A U-Net model."""
 
     input_channels: int
@@ -34,6 +39,7 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
         depth: int,
         num_classes: int,
         ignore_index: int,
+        input_shape: tuple[int, int],
         conv_lr: float = 3e-4,
         film_lr: float = 3e-4,
         embed_dim: int = 48,
@@ -55,8 +61,9 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
         self.embed_dim = embed_dim
         self.hidden_embed_dim = hidden_embed_dim
         self.num_classes_with_ignore = num_classes + 1
+        self.input_shape = input_shape
 
-        self.network = nnet.modules.ConditionalUNet3Plus(
+        self.network = nnet.modules.ConditionalShiftUNet3Plus(
             input_channels=self.input_channels,
             base_channels=self.base_channels,
             depth=self.depth,
@@ -64,6 +71,7 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
             dropout=self.dropout,
             embed_dim=self.embed_dim,
             hidden_embed_dim=self.hidden_embed_dim,
+            input_shape=self.input_shape,
         ).to(self.device)
 
         self.conv_optimizer = torch.optim.Adam(
@@ -131,20 +139,20 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
         """Validate the model."""
         self.network.eval()
 
-        loss, accuracy = self._calc_loss_acc(inputs, targets)
+        loss, accuracy = self._calc_loss_acc(inputs, targets, report=True)
 
         # self.scheduler.step(loss)
 
         return loss.item(), accuracy
 
-    def _calc_loss_acc(self, inputs, targets):
+    def _calc_loss_acc(self, inputs, targets, report=False):
         images, conditions = nnet.util.send_to_device(inputs, self.device)
         targets = nnet.util.send_to_device(targets, self.device)
 
         if isinstance(targets, tuple):
             targets = targets[0]
 
-        outputs = self.network(images.float(), conditions.float())
+        outputs, offsets = self.network(images.float(), conditions.float())
 
         label_outputs = torch.argmax(outputs, dim=1)
 
@@ -157,20 +165,70 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
             ignore_index=self.ignore_index,
         )
 
-        # ce_loss = torch.nn.functional.cross_entropy(
-        #    flat_outputs, flat_targets, ignore_index=self.ignore_index
-        # )
-        # dice_loss = nnet.loss.dice_loss(
-        #    inputs=outputs,
-        #    targets=targets,
-        #    ignore_index=self.ignore_index,
-        # )
-        # loss = ce_loss + dice_loss
-        loss = nnet.loss.tversky_loss(
+        seg_loss = nnet.loss.tversky_loss(
             inputs=outputs,
             targets=targets,
             ignore_index=self.ignore_index,
         )
+
+        with torch.no_grad():
+            pred_mask = torch.argmax(outputs, dim=1)[:, None, :, :]
+            pred_mask_offset = torch.roll(pred_mask, shifts=-1, dims=2)
+
+            true_mask = targets
+            true_mask_offset = torch.roll(true_mask, shifts=-1, dims=2)
+
+            pred_borders = torch.zeros(
+                (
+                    pred_mask.shape[0],
+                    self.num_classes - 1,
+                    pred_mask.shape[2],
+                    pred_mask.shape[3],
+                ),
+                device=self.device,
+            )
+            true_borders = torch.zeros(
+                (
+                    true_mask.shape[0],
+                    self.num_classes - 1,
+                    true_mask.shape[2],
+                    true_mask.shape[3],
+                ),
+                device=self.device,
+            )
+            for i in range(self.num_classes - 1):
+                pred_borders[:, i, :, :] = (
+                    ((pred_mask == i) & (pred_mask_offset == i + 1))
+                    .to(torch.float32)
+                    .squeeze()
+                )
+                true_borders[:, i, :, :] = (
+                    ((true_mask == i) & (true_mask_offset == i + 1))
+                    .to(torch.float32)
+                    .squeeze()
+                )
+
+            pred_depth_weighted = pred_borders * DEPTH_MULTI.to(self.device)
+            true_depth_weighted = true_borders * DEPTH_MULTI.to(self.device)
+
+            pred_avg_depth = torch.sum(pred_depth_weighted, dim=(2, 3)) / (
+                torch.sum(pred_borders, dim=(2, 3)) + 1e-8
+            )
+
+            true_avg_depth = torch.sum(true_depth_weighted, dim=(2, 3)) / (
+                torch.sum(true_borders, dim=(2, 3)) + 1e-8
+            )
+
+            diff = pred_avg_depth - true_avg_depth
+
+        offsets = offsets.to(torch.float64)
+
+        diff_loss = torch.nn.functional.mse_loss(diff, offsets, reduction="sum")
+
+        loss = seg_loss + diff_loss
+
+        if report:
+            print(offsets - diff)
 
         return loss, f1_score
 
@@ -183,11 +241,30 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
 
         images, conditions = nnet.util.send_to_device(inputs, self.device)
 
-        outputs = self.network(images.float(), conditions.float())
+        outputs, offsets = self.network(images.float(), conditions.float())
 
-        label_outputs = torch.argmax(outputs, dim=1)
+        label_outputs = torch.argmax(outputs, dim=1).detach().cpu().numpy()
+        offset_labels = np.roll(label_outputs, shift=-1, axis=1)
 
-        return label_outputs.detach().cpu().numpy()
+        offsets = np.floor(
+            offsets.detach().cpu().numpy() * label_outputs.shape[1]
+        ).astype(int)
+
+        for i in range(offsets.shape[1]):
+            cur_borders = np.zeros_like(label_outputs)
+            cur_borders[(label_outputs == i) & (offset_labels == i + 1)] = 1
+            offset_borders = np.roll(cur_borders, 1, axis=1)
+            for j in range(offsets.shape[0]):
+                roll_dir = np.sign(offsets[j, i])
+                inst_border = cur_borders[j]
+                inst_offset = offset_borders[j]
+                for k in range(abs(offsets[j, i])):
+                    inst_border = np.roll(inst_border, roll_dir, axis=0)
+                    inst_offset = np.roll(inst_offset, roll_dir, axis=0)
+                    label_outputs[j, inst_border == 1] = i
+                    label_outputs[j, inst_offset == 1] = i + 1
+
+        return label_outputs
 
     def save(self, path: str):
         """Save the model to a file."""
@@ -206,6 +283,7 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
             "film_optimizer": self.film_optimizer.state_dict(),
             "hidden_embed_dim": self.hidden_embed_dim,
             "embedding_dim": self.embed_dim,
+            "input_shape": self.input_shape,
         }
         torch.save(checkpoint, path)
 
@@ -225,6 +303,7 @@ class ConditionalUNet3PlusModel(nnet.protocols.ModelProtocol):
             step=checkpoint["step"],
             embed_dim=checkpoint["embedding_dim"],
             hidden_embed_dim=checkpoint["hidden_embed_dim"],
+            input_shape=checkpoint["input_shape"],
         )
         model.network.load_state_dict(checkpoint["network"])
         model.conv_optimizer.load_state_dict(checkpoint["conv_optimizer"])

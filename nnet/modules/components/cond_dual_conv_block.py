@@ -29,8 +29,6 @@ class CondDualConvBlock(torch.nn.Module):
             embedding_dim=embedding_dim,
         )
 
-        self.film = nnet.modules.conditional.FiLM(out_channels, embedding_dim)
-
         self.conv2 = nnet.modules.components.CondConvBlock(
             in_channels=out_channels,
             out_channels=out_channels,
@@ -46,3 +44,9 @@ class CondDualConvBlock(torch.nn.Module):
         x = self.conv1(x, condition)
         x = self.conv2(x, condition)
         return x
+
+    def conv_params(self):
+        return list(self.conv1.conv_params()) + list(self.conv2.conv_params())
+
+    def film_params(self):
+        return list(self.conv1.film_params()) + list(self.conv2.film_params())

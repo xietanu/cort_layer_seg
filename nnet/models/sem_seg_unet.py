@@ -3,18 +3,16 @@ import torch
 
 import nnet
 import nnet.modules
-import nnet.loss
-import evaluate
 
 
-class UNet3PlusModel(nnet.protocols.ModelProtocol):
+class SemantSegUNetModel(nnet.protocols.ModelProtocol):
     """A U-Net model."""
 
-    input_channels: int
-    base_channels: int
-    depth: int
+    encoder_map: list[list[int]]
+    decoder_map: list[list[int]]
+    final_image_size: tuple[int, int]
+    hidden_size: int
     num_classes: int
-    dropout: float
     ignore_index: int
     learning_rate: float
     device: torch.device
@@ -23,19 +21,21 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
 
     def __init__(
         self,
-        input_channels: int,
-        base_channels: int,
-        depth: int,
+        encoder_map: list[list[int]],
+        decoder_map: list[list[int]],
+        final_image_size: tuple[int, int],
+        hidden_size: int,
         num_classes: int,
         ignore_index: int,
-        learning_rate: float = 3e-4,
+        learning_rate: float,
         device: torch.device = torch.device("cuda"),
         dropout: float = 0.0,
         step: int = 0,
     ):
-        self.input_channels = input_channels
-        self.base_channels = base_channels
-        self.depth = depth
+        self.encoder_map = encoder_map
+        self.decoder_map = decoder_map
+        self.final_image_size = final_image_size
+        self.hidden_size = hidden_size
         self.num_classes = num_classes
         self.learning_rate = learning_rate
         self.device = device
@@ -43,10 +43,11 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
         self.ignore_index = ignore_index
         self.dropout = dropout
 
-        self.network = nnet.modules.UNet3Plus(
-            input_channels=self.input_channels,
-            base_channels=self.base_channels,
-            depth=self.depth,
+        self.network = nnet.modules.SemantSegUNet(
+            encoder_map=self.encoder_map,
+            decoder_map=self.decoder_map,
+            final_image_size=self.final_image_size,
+            hidden_size=self.hidden_size,
             num_classes=self.num_classes,
             dropout=self.dropout,
         ).to(self.device)
@@ -98,29 +99,22 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
 
         label_outputs[targets.squeeze() == self.ignore_index] = self.ignore_index
 
-        f1_score = evaluate.f1_score(
-            torch.argmax(outputs, dim=1).detach().cpu(),
-            targets.detach().cpu(),
-            n_classes=self.num_classes,
-            ignore_index=self.ignore_index,
+        acc_num = torch.sum(label_outputs == targets.squeeze()) - torch.sum(
+            targets == self.ignore_index
         )
 
-        # ce_loss = torch.nn.functional.cross_entropy(
-        #    flat_outputs, flat_targets, ignore_index=self.ignore_index
-        # )
-        # dice_loss = nnet.loss.dice_loss(
-        #    inputs=outputs,
-        #    targets=targets,
-        #    ignore_index=self.ignore_index,
-        # )
-        # loss = ce_loss + dice_loss
-        loss = nnet.loss.tversky_loss(
-            inputs=outputs,
-            targets=targets,
-            ignore_index=self.ignore_index,
+        acc_den = torch.sum(targets != self.ignore_index)
+
+        accuracy = (acc_num.float() / acc_den.float()).item()
+
+        flat_targets = targets.flatten().long()
+        flat_outputs = outputs.permute(0, 2, 3, 1).reshape(-1, self.num_classes)
+
+        loss = torch.nn.functional.cross_entropy(
+            flat_outputs, flat_targets, ignore_index=self.ignore_index
         )
 
-        return loss, f1_score
+        return loss, accuracy
 
     def predict(
         self,
@@ -140,9 +134,10 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
     def save(self, path: str):
         """Save the model to a file."""
         checkpoint = {
-            "input_channels": self.input_channels,
-            "base_channels": self.base_channels,
-            "depth": self.depth,
+            "encoder_map": self.encoder_map,
+            "decoder_map": self.decoder_map,
+            "final_image_size": self.final_image_size,
+            "hidden_size": self.hidden_size,
             "num_classes": self.num_classes,
             "learning_rate": self.learning_rate,
             "ignore_index": self.ignore_index,
@@ -158,9 +153,10 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
         """Restore the model from a file."""
         checkpoint = torch.load(path)
         model = cls(
-            input_channels=checkpoint["input_channels"],
-            base_channels=checkpoint["base_channels"],
-            depth=checkpoint["depth"],
+            encoder_map=checkpoint["encoder_map"],
+            decoder_map=checkpoint["decoder_map"],
+            final_image_size=checkpoint["final_image_size"],
+            hidden_size=checkpoint["hidden_size"],
             num_classes=checkpoint["num_classes"],
             learning_rate=checkpoint["learning_rate"],
             device=torch.device(checkpoint["device"]),

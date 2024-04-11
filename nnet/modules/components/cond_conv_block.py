@@ -37,3 +37,9 @@ class CondConvBlock(torch.nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
         return x
+
+    def conv_params(self):
+        return list(self.conv.parameters()) + list(self.batch_norm.parameters())
+
+    def film_params(self):
+        return list(self.film.parameters())

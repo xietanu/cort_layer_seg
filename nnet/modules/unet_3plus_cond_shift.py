@@ -4,13 +4,14 @@ import nnet.modules.components
 import nnet.modules.conditional
 
 
-class ConditionalUNet3Plus(torch.nn.Module):
+class ConditionalShiftUNet3Plus(torch.nn.Module):
     def __init__(
         self,
         input_channels: int,
         base_channels: int,
         depth: int,
         num_classes: int,
+        input_shape: tuple[int, int],
         embed_dim: int,
         hidden_embed_dim: int,
         dropout: float = 0.0,
@@ -23,6 +24,13 @@ class ConditionalUNet3Plus(torch.nn.Module):
 
         self.cond_embed = torch.nn.Sequential(
             torch.nn.Linear(embed_dim, hidden_embed_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_embed_dim, hidden_embed_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_embed_dim, hidden_embed_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_embed_dim, hidden_embed_dim),
+            torch.nn.ReLU(),
         )
 
         self.backbone = CondUnet3PlusBackbone(
@@ -44,25 +52,89 @@ class ConditionalUNet3Plus(torch.nn.Module):
             ]
         )
 
-        self.final_conv = torch.nn.Conv2d(
-            in_channels=base_channels * depth,
-            out_channels=num_classes,
-            kernel_size=1,
+        self.seg_head = torch.nn.Sequential(
+            nnet.modules.components.DualConvBlock(
+                in_channels=base_channels * depth,
+                out_channels=base_channels * depth,
+                dropout=dropout,
+            ),
+            torch.nn.Conv2d(
+                in_channels=base_channels * depth,
+                out_channels=num_classes,
+                kernel_size=1,
+            ),
         )
+
+        height, width = input_shape
+
+        self.offset_head = torch.nn.ModuleList(
+            [
+                nnet.modules.components.ConvBlock(
+                    in_channels=base_channels * depth,
+                    out_channels=base_channels,
+                    kernel_size=1,
+                ),
+            ]
+        )
+
+        current_channels = base_channels
+
+        while height > 2 and width > 2:
+            height //= 2
+            width //= 2
+            self.offset_head.append(
+                torch.nn.MaxPool2d(kernel_size=2, stride=2),
+            )
+            self.offset_head.append(
+                nnet.modules.components.DualConvBlock(
+                    in_channels=current_channels,
+                    out_channels=current_channels * 2,
+                    dropout=dropout,
+                ),
+            )
+            current_channels *= 2
+
+        self.offset_head.extend(
+            [
+                torch.nn.Flatten(),
+                torch.nn.Linear(current_channels * height * width, base_channels),
+                torch.nn.ReLU(),
+                torch.nn.Linear(base_channels, base_channels),
+                torch.nn.ReLU(),
+                torch.nn.Linear(base_channels, num_classes - 1),
+            ]
+        )
+
+        self.offset_head = torch.nn.Sequential(*self.offset_head)
+
+        # self.border_head = torch.nn.Sequential(
+        #    nnet.modules.components.DualConvBlock(
+        #        in_channels=base_channels * depth,
+        #        out_channels=base_channels * depth,
+        #        dropout=dropout,
+        #    ),
+        #    torch.nn.Conv2d(
+        #        in_channels=base_channels * depth,
+        #          out_channels=num_classes - 1,
+        #        kernel_size=1,
+        #    ),
+        # )
 
     def conv_params(self):
         params = (
             list(self.input_conv.parameters())
-            + list(self.final_conv.parameters())
+            + list(self.seg_head.parameters())
             + list(self.decoders.parameters())
             + list(self.backbone.conv_params())
         )
         return params
 
     def film_params(self):
-        return self.backbone.film_params()
+        return list(self.backbone.film_params()) + list(self.offset_head.parameters())
 
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, cond: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         cond_embed = self.cond_embed(cond)
         x = self.input_conv(x)
         residuals = self.backbone(x, cond_embed)
@@ -72,7 +144,14 @@ class ConditionalUNet3Plus(torch.nn.Module):
             output = decoder(residuals[: i + 1] + list(reversed(decoder_outputs)))
             decoder_outputs.append(output)
 
-        return self.final_conv(decoder_outputs[-1])
+        segmentation = self.seg_head(decoder_outputs[-1])
+
+        offsets = self.offset_head(decoder_outputs[-1])
+
+        return (
+            segmentation,
+            offsets,
+        )
 
 
 class CondUnet3PlusBackbone(torch.nn.Module):

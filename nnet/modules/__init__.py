@@ -6,3 +6,4 @@ from nnet.modules.unet_3plus import UNet3Plus
 from nnet.modules.nnet import NNet
 from nnet.modules.nnet_cond import ConditionalNNet
 from nnet.modules.unet_3plus_cond import ConditionalUNet3Plus
+from nnet.modules.unet_3plus_cond_shift import ConditionalShiftUNet3Plus
