@@ -15,8 +15,9 @@ def tversky_loss(
     flat_inputs = torch.nn.functional.softmax(flat_inputs, dim=1)
 
     flat_targets = torch.nn.functional.one_hot(
-        targets.flatten().to(torch.int64), num_classes=n_classes
+        targets.flatten().to(torch.int64), num_classes=n_classes + 1
     )
+    flat_targets = flat_targets[:, :n_classes]
 
     flat_targets[targets.flatten() == ignore_index] = 0
 
