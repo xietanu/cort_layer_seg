@@ -1,26 +1,36 @@
+import numpy as np
 import torch
+
+import cort
 
 
 def f1_score(
-    pred: torch.Tensor,
-    target: torch.Tensor,
+    pred: torch.Tensor | list[cort.CorticalPatch] | np.ndarray,
+    target: torch.Tensor | list[cort.CorticalPatch] | np.ndarray,
+    n_classes: int,
     ignore_index: int,
-    softmax_based: bool = False,
     epsilon: float = 1e-6,
 ) -> float:
     """Compute the F1 score."""
-    n_classes = pred.shape[1]
 
-    flat_pred = pred.permute(0, 2, 3, 1).reshape(-1, n_classes)
-    flat_pred[target.flatten() == ignore_index] = 0
+    if isinstance(pred, list):
+        pred = np.stack([p.mask for p in pred])
+        target = np.stack([t.mask for t in target])
 
-    if not softmax_based:
+    if isinstance(pred, np.ndarray):
+        pred = torch.from_numpy(pred)
+        target = torch.from_numpy(target)
+
+    if len(pred.shape) == 3:
         flat_pred = torch.nn.functional.one_hot(
-            torch.argmax(flat_pred, dim=1), num_classes=n_classes
+            pred.flatten().to(torch.int64), num_classes=n_classes + 1
         )
+        flat_pred[target.flatten() == ignore_index] = 0
+    else:
+        raise ValueError(f"Invalid input shape, got {pred.shape}")
 
     flat_target = torch.nn.functional.one_hot(
-        target.flatten().to(torch.int64), num_classes=n_classes
+        target.flatten().to(torch.int64), num_classes=n_classes + 1
     )
 
     flat_target[target.flatten() == ignore_index] = 0

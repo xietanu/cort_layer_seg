@@ -5,6 +5,7 @@ import json
 import cort
 import nnet
 import nnet.models
+import datasets.protocols
 
 AREA_MAPPING_PATH = "data/cort_patches/area_mapping.json"
 
@@ -12,7 +13,7 @@ AREA_MAPPING_PATH = "data/cort_patches/area_mapping.json"
 def pred_patches(
     model: nnet.protocols.ModelProtocol,
     patches: list[cort.CorticalPatch],
-    conditional: bool = False,
+    condition: datasets.protocols.Condition | None = None,
     batch_size: int = 4,
 ) -> list[cort.CorticalPatch]:
     """Predict the labels for the given patches."""
@@ -20,16 +21,13 @@ def pred_patches(
     inputs = torch.tensor(inputs, dtype=torch.float64)
     inputs = inputs.to(model.device)
 
-    if conditional:
-        area_mapping = json.load(open(AREA_MAPPING_PATH, "r"))
-        condition = torch.tensor(
-            [area_mapping[patch.brain_area] for patch in patches], dtype=torch.float64
-        )
-        condition = condition.to(model.device)
+    if condition is not None:
+        # area_mapping = json.load(open(AREA_MAPPING_PATH, "r"))
+        condition = torch.stack([condition(patch) for patch in patches], dim=0)
 
     outputs = []
     for i in range(0, len(inputs), batch_size):
-        if conditional:
+        if condition is not None:
             output = model.predict(
                 (inputs[i : i + batch_size], condition[i : i + batch_size])
             )
