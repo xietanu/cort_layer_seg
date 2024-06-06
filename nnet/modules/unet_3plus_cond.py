@@ -13,17 +13,38 @@ class ConditionalUNet3Plus(torch.nn.Module):
         num_classes: int,
         embed_dim: int,
         hidden_embed_dim: int,
+        uses_condition: bool = False,
+        uses_position: bool = False,
         dropout: float = 0.0,
     ):
         super().__init__()
 
+        if not uses_condition and not uses_position:
+            raise ValueError(
+                "At least one of uses_condition and uses_position must be True"
+            )
+
         self.input_conv = nnet.modules.components.ConvBlock(
             in_channels=input_channels, out_channels=base_channels
         )
+        # mid_embed_dim = max(hidden_embed_dim, embed_dim)
 
-        self.cond_embed = torch.nn.Sequential(
-            torch.nn.Linear(embed_dim, hidden_embed_dim),
-        )
+        if uses_condition:
+            self.cond_embed = torch.nn.Sequential(
+                torch.nn.Linear(embed_dim, hidden_embed_dim),
+                # torch.nn.ReLU(),
+                # torch.nn.Linear(mid_embed_dim, mid_embed_dim),
+                # torch.nn.ReLU(),
+                # torch.nn.Linear(mid_embed_dim, mid_embed_dim),
+                # torch.nn.ReLU(),
+                # torch.nn.Linear(mid_embed_dim, hidden_embed_dim),
+                # torch.nn.ReLU(),
+            )
+
+        if uses_position:
+            self.pos_embed = nnet.modules.conditional.PositionalEmbed3d(
+                embedding_dim=hidden_embed_dim,
+            )
 
         self.backbone = CondUnet3PlusBackbone(
             base_channels=base_channels,
@@ -49,6 +70,8 @@ class ConditionalUNet3Plus(torch.nn.Module):
             out_channels=num_classes,
             kernel_size=1,
         )
+        self.uses_condition = uses_condition
+        self.uses_position = uses_position
 
     def conv_params(self):
         params = (
@@ -60,10 +83,30 @@ class ConditionalUNet3Plus(torch.nn.Module):
         return params
 
     def film_params(self):
-        return self.backbone.film_params()
+        return (
+            list(self.backbone.film_params())
+            + (list(self.cond_embed.parameters()) if self.uses_condition else [])
+            + (list(self.pos_embed.parameters()) if self.uses_position else [])
+        )
 
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        cond_embed = self.cond_embed(cond)
+    def forward(
+        self, x: torch.Tensor, cond: torch.Tensor, pos: torch.Tensor
+    ) -> torch.Tensor:
+        if not self.uses_condition and not self.uses_position:
+            raise ValueError(
+                "At least one of uses_condition and uses_position must be True"
+            )
+
+        if self.uses_condition:
+            label_embed = self.cond_embed(cond)
+            cond_embed = label_embed
+        if self.uses_position:
+            pos_embed = self.pos_embed(pos)
+            cond_embed = pos_embed
+
+        if self.uses_condition and self.uses_position:
+            cond_embed = label_embed + pos_embed
+
         x = self.input_conv(x)
         residuals = self.backbone(x, cond_embed)
         decoder_outputs = [residuals[-1]]

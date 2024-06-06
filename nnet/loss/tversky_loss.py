@@ -2,15 +2,15 @@ import torch
 
 
 def tversky_loss(
-    inputs: torch.Tensor,
+    outputs: torch.Tensor,
     targets: torch.Tensor,
     ignore_index: int,
     epsilon: float = 1e-6,
 ) -> torch.Tensor:
     """Compute the Dice loss."""
-    n_classes = inputs.shape[1]
+    n_classes = outputs.shape[1]
 
-    flat_inputs = inputs.permute(0, 2, 3, 1).reshape(-1, n_classes)
+    flat_inputs = outputs.permute(0, 2, 3, 1).reshape(-1, n_classes)
     flat_inputs[targets.flatten() == ignore_index] = 0
     flat_inputs = torch.nn.functional.softmax(flat_inputs, dim=1)
 

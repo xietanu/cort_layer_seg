@@ -27,7 +27,7 @@ class CondConvBlock(torch.nn.Module):
         )
         self.relu = torch.nn.LeakyReLU()
         self.dropout = torch.nn.Dropout2d(p=dropout)
-        self.batch_norm = torch.nn.BatchNorm2d(out_channels)
+        self.batch_norm = torch.nn.InstanceNorm2d(out_channels, affine=True, eps=1e-5)
         self.film = nnet.modules.conditional.FiLM(out_channels, embedding_dim)
 
     def forward(self, x: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:

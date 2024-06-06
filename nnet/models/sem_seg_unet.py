@@ -1,8 +1,14 @@
+from dataclasses import dataclass
+
 import numpy as np
 import torch
 
+import datasets.datatypes
 import nnet
 import nnet.modules
+import nnet.protocols
+import nnet.loss
+import evaluate
 
 
 class SemantSegUNetModel(nnet.protocols.ModelProtocol):
@@ -21,123 +27,166 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
 
     def __init__(
         self,
-        encoder_map: list[list[int]],
-        decoder_map: list[list[int]],
-        final_image_size: tuple[int, int],
-        hidden_size: int,
         num_classes: int,
         ignore_index: int,
         learning_rate: float,
         device: torch.device = torch.device("cuda"),
         dropout: float = 0.0,
         step: int = 0,
+        **network_kwargs,
     ):
-        self.encoder_map = encoder_map
-        self.decoder_map = decoder_map
-        self.final_image_size = final_image_size
-        self.hidden_size = hidden_size
         self.num_classes = num_classes
         self.learning_rate = learning_rate
         self.device = device
         self.step = step
         self.ignore_index = ignore_index
         self.dropout = dropout
+        self.network_kwargs = network_kwargs
 
         self.network = nnet.modules.SemantSegUNet(
-            encoder_map=self.encoder_map,
-            decoder_map=self.decoder_map,
-            final_image_size=self.final_image_size,
-            hidden_size=self.hidden_size,
+            **network_kwargs,
             num_classes=self.num_classes,
-            dropout=self.dropout,
         ).to(self.device)
         self.optimizer = torch.optim.Adam(
             self.network.parameters(), lr=self.learning_rate
         )
+        # self.scheduler = torch.optim.lr_scheduler.StepLR(
+        #    self.optimizer, step_size=163, gamma=0.96
+        # )
+        self.scheduler = torch.optim.lr_scheduler.LinearLR(
+            self.optimizer, start_factor=1.0, end_factor=0.1, total_iters=163 * 50
+        )
 
     def train_one_step(
         self,
-        inputs: torch.Tensor | tuple[torch.Tensor, ...],
-        targets: torch.Tensor | tuple[torch.Tensor, ...],
-    ) -> tuple[float, float]:
+        inputs: datasets.datatypes.DataInputs,
+        ground_truths: datasets.datatypes.GroundTruths,
+    ) -> tuple[float, float, float]:
         """Train the model on one step."""
         self.network.train()
         self.optimizer.zero_grad()
 
-        loss, accuracy = self._calc_loss_acc(inputs, targets)
+        loss, accuracy, acc_err = self._calc_loss_acc(inputs, ground_truths)
 
         loss.backward()
 
         self.optimizer.step()
+        self.scheduler.step()
 
         self.step += 1
 
-        return loss.item(), accuracy
+        return loss.item(), accuracy, acc_err
 
     def validate(
         self,
-        inputs: torch.Tensor | tuple[torch.Tensor, ...],
-        targets: torch.Tensor | tuple[torch.Tensor, ...],
-    ) -> tuple[float, float]:
+        inputs: datasets.datatypes.DataInputs,
+        ground_truths: datasets.datatypes.GroundTruths,
+    ) -> tuple[float, float, float]:
         """Validate the model."""
         self.network.eval()
 
-        loss, accuracy = self._calc_loss_acc(inputs, targets)
+        loss, accuracy, acc_err = self._calc_loss_acc(inputs, ground_truths)
 
-        return loss.item(), accuracy
+        return loss.item(), accuracy, acc_err
 
-    def _calc_loss_acc(self, inputs, targets):
-        inputs = nnet.util.send_to_device(inputs, self.device)
-        targets = nnet.util.send_to_device(targets, self.device)
+    def _calc_loss_acc(
+        self,
+        inputs: datasets.datatypes.DataInputs,
+        ground_truths: datasets.datatypes.GroundTruths,
+    ) -> tuple[torch.Tensor, float, float]:
+        inputs.to_device(self.device)
+        ground_truths.to_device(self.device)
 
-        if isinstance(targets, tuple):
-            targets = targets[0]
-
-        outputs = self.network(inputs.float())
-
-        label_outputs = torch.argmax(outputs, dim=1)
-
-        label_outputs[targets.squeeze() == self.ignore_index] = self.ignore_index
-
-        acc_num = torch.sum(label_outputs == targets.squeeze()) - torch.sum(
-            targets == self.ignore_index
+        raw_outputs = self.network(
+            inputs.input_images.float(),
+            (
+                inputs.area_probabilities.float()
+                if inputs.area_probabilities is not None
+                else None
+            ),
+            inputs.position.float() if inputs.position is not None else None,
         )
 
-        acc_den = torch.sum(targets != self.ignore_index)
+        seg_outputs, acc_outputs = raw_outputs[:2]
 
-        accuracy = (acc_num.float() / acc_den.float()).item()
+        label_outputs = torch.argmax(seg_outputs, dim=1)
 
-        flat_targets = targets.flatten().long()
-        flat_outputs = outputs.permute(0, 2, 3, 1).reshape(-1, self.num_classes)
-
-        loss = torch.nn.functional.cross_entropy(
-            flat_outputs, flat_targets, ignore_index=self.ignore_index
+        label_outputs[ground_truths.segmentation.squeeze(1) == self.ignore_index] = (
+            self.ignore_index
         )
 
-        return loss, accuracy
+        accuracy = evaluate.mean_dice(
+            label_outputs.detach().cpu(),
+            ground_truths.segmentation.detach().cpu(),
+            n_classes=self.num_classes,
+            ignore_index=self.ignore_index,
+        )
+
+        with torch.no_grad():
+            per_sample_dice = torch.tensor(
+                [
+                    evaluate.f1_score(
+                        label_outputs[None, i],
+                        ground_truths.segmentation[None, i],
+                        self.num_classes,
+                        self.ignore_index,
+                    )
+                    for i in range(len(ground_truths.segmentation))
+                ],
+                device=self.device,
+            )
+
+        if len(raw_outputs) == 3:
+            loss = nnet.loss.seg_acc_depth_loss(
+                raw_outputs, ground_truths, per_sample_dice, self.ignore_index
+            )
+        else:
+            loss = nnet.loss.seg_acc_loss(
+                raw_outputs, ground_truths, per_sample_dice, self.ignore_index
+            )
+
+        with torch.no_grad():
+            acc_err = torch.abs(raw_outputs[1] - per_sample_dice).mean()
+
+        return loss, accuracy, acc_err
 
     def predict(
         self,
-        inputs: torch.Tensor | tuple[torch.Tensor, ...],
-    ) -> np.ndarray:
+        inputs: datasets.datatypes.DataInputs,
+        logits: bool = False,
+    ) -> datasets.datatypes.Predictions:
         """Predict the model."""
         self.network.eval()
 
-        inputs = nnet.util.send_to_device(inputs, self.device)
+        inputs.to_device(self.device)
 
-        outputs = self.network(inputs.float())
+        raw_ouputs = self.network(
+            inputs.input_images.float(),
+            (
+                inputs.area_probabilities.float()
+                if inputs.area_probabilities is not None
+                else None
+            ),
+            inputs.position.float() if inputs.position is not None else None,
+        )
 
-        label_outputs = torch.argmax(outputs, dim=1)
+        seg_outputs, acc_outputs = raw_ouputs[:2]
 
-        return label_outputs.detach().cpu().numpy()
+        logits = seg_outputs.detach().cpu()
+
+        labels = torch.argmax(seg_outputs, dim=1).detach().cpu().unsqueeze(1)
+
+        return datasets.datatypes.Predictions(
+            segmentation=labels,
+            accuracy=acc_outputs.detach().cpu(),
+            depth_maps=(raw_ouputs[2].detach().cpu() if len(raw_ouputs) == 3 else None),
+            logits=logits,
+        )
 
     def save(self, path: str):
         """Save the model to a file."""
         checkpoint = {
-            "encoder_map": self.encoder_map,
-            "decoder_map": self.decoder_map,
-            "final_image_size": self.final_image_size,
-            "hidden_size": self.hidden_size,
+            "network_kwargs": self.network_kwargs,
             "num_classes": self.num_classes,
             "learning_rate": self.learning_rate,
             "ignore_index": self.ignore_index,
@@ -145,6 +194,7 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
             "step": self.step,
             "network": self.network.state_dict(),
             "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
         }
         torch.save(checkpoint, path)
 
@@ -153,16 +203,23 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
         """Restore the model from a file."""
         checkpoint = torch.load(path)
         model = cls(
-            encoder_map=checkpoint["encoder_map"],
-            decoder_map=checkpoint["decoder_map"],
-            final_image_size=checkpoint["final_image_size"],
-            hidden_size=checkpoint["hidden_size"],
             num_classes=checkpoint["num_classes"],
             learning_rate=checkpoint["learning_rate"],
             device=torch.device(checkpoint["device"]),
             ignore_index=checkpoint["ignore_index"],
             step=checkpoint["step"],
+            **checkpoint["network_kwargs"],
         )
         model.network.load_state_dict(checkpoint["network"])
         model.optimizer.load_state_dict(checkpoint["optimizer"])
+        model.scheduler.load_state_dict(checkpoint["scheduler"])
         return model
+
+    def load(self, path: str):
+        """Load the model from a file."""
+        checkpoint = torch.load(path)
+        self.network.load_state_dict(checkpoint["network"])
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        self.scheduler.load_state_dict(checkpoint["scheduler"])
+        self.step = checkpoint["step"]
+        return self

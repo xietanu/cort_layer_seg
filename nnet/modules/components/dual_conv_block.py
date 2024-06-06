@@ -39,3 +39,9 @@ class DualConvBlock(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv1(x)
         return self.conv2(x)
+
+    def conv_params(self):
+        return list(self.conv1.parameters()) + list(self.conv2.parameters())
+
+    def film_params(self):
+        return []

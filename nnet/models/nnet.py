@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 import nnet
+import nnet.protocols
 import nnet.modules
 import nnet.loss
 
@@ -168,3 +169,12 @@ class NNetModel(nnet.protocols.ModelProtocol):
         model.network.load_state_dict(checkpoint["network"])
         model.optimizer.load_state_dict(checkpoint["optimizer"])
         return model
+
+    def load(self, path: str):
+        """Load the model from a file."""
+        checkpoint = torch.load(path)
+        self.network.load_state_dict(checkpoint["network"])
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        self.step = checkpoint["step"]
+
+        return self

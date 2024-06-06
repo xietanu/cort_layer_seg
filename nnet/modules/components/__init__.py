@@ -8,3 +8,12 @@ from nnet.modules.components.se import SEModule
 from nnet.modules.components.dual_encoder import NNetDualEncoder
 from nnet.modules.components.cond_dual_encoder import CondNNetDualEncoder
 from nnet.modules.components.condunet3plus_decoder import CondUnet3PlusDecoder
+from nnet.modules.components.heads import (
+    SegmentationHead,
+    DepthMapHead,
+    DualHead,
+    AccuracyHead,
+    SegAccHead,
+    SegAccDepthHead,
+    BottomAccuracyHead,
+)

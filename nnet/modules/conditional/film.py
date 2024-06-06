@@ -34,8 +34,8 @@ class FiLM(torch.nn.Module):
     def forward(self, image: torch.Tensor, embedding: torch.Tensor) -> torch.Tensor:
         gamma, beta = self.fc(embedding).chunk(2, dim=1)
 
-        gamma_ranges = gamma.max(dim=0).values - gamma.min(dim=0).values
-        beta_ranges = beta.max(dim=0).values - beta.min(dim=0).values
+        # gamma_ranges = gamma.max(dim=0).values - gamma.min(dim=0).values
+        # beta_ranges = beta.max(dim=0).values - beta.min(dim=0).values
 
         # if not self._train:
         #    print(f"Gamma: {gamma_ranges.mean()}, Beta: {beta_ranges.mean()}")

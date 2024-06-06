@@ -3,6 +3,9 @@ from typing import Protocol
 import torch
 import numpy as np
 
+import datasets
+import nnet.dataclasses
+
 
 class ModelProtocol(Protocol):
     step: int
@@ -10,9 +13,9 @@ class ModelProtocol(Protocol):
 
     def train_one_step(
         self,
-        inputs: torch.Tensor | tuple[torch.Tensor, ...],
-        targets: torch.Tensor | tuple[torch.Tensor, ...],
-    ) -> tuple[float, float]:  # type: ignore
+        inputs: datasets.datatypes.DataInputs,
+        ground_truths: datasets.datatypes.GroundTruths,
+    ) -> tuple[float, float, float]:  # type: ignore
         """Train the model on one step."""
 
     def save(self, path: str):
@@ -22,15 +25,18 @@ class ModelProtocol(Protocol):
     def restore(cls, path: str):
         """Restore the model from a file."""
 
+    def load(self, path: str):
+        """Load the model from a file."""
+
     def validate(
         self,
-        inputs: torch.Tensor | tuple[torch.Tensor, ...],
-        targets: torch.Tensor | tuple[torch.Tensor, ...],
-    ) -> tuple[float, float]:  # type: ignore
+        inputs: datasets.datatypes.DataInputs,
+        ground_truths: datasets.datatypes.GroundTruths,
+    ) -> tuple[float, float, float]:  # type: ignore
         """Validate the model."""
 
     def predict(
         self,
-        inputs: torch.Tensor | tuple[torch.Tensor, ...],
-    ) -> np.ndarray:
-        """Predict the outputs for given inputs."""
+        inputs: datasets.datatypes.DataInputs,
+    ) -> datasets.datatypes.Predictions:
+        """Predict the outputs for given outputs."""

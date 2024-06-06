@@ -24,7 +24,7 @@ class ConvBlock(torch.nn.Module):
         )
         self.relu = torch.nn.LeakyReLU()
         self.dropout = torch.nn.Dropout2d(p=dropout)
-        self.batch_norm = torch.nn.BatchNorm2d(out_channels)
+        self.batch_norm = torch.nn.InstanceNorm2d(out_channels, affine=True, eps=1e-5)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.dropout(self.relu(self.batch_norm(self.conv(x))))

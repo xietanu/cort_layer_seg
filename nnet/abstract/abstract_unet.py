@@ -8,8 +8,14 @@ import nnet.loss
 import evaluate
 
 
-class UNet3PlusModel(nnet.protocols.ModelProtocol):
+class AbstractUNetModel(nnet.protocols.ModelProtocol, abc.ABC):
     """A U-Net model."""
+
+    model_class: type[torch.nn.Module]
+
+    @abc.abstractmethod
+    def get_loss(self, outputs, targets, ignore_index):
+        pass
 
     def __init__(
         self,
@@ -29,9 +35,9 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
         self.num_classes = num_classes
         self.network_kwargs = network_kwargs
 
-        self.network = nnet.modules.UNet3Plus(
-            **network_kwargs, num_classes=num_classes
-        ).to(self.device)
+        self.network = self.model_class(num_classes=num_classes, **network_kwargs).to(
+            self.device
+        )
 
         if len(self.network.film_params()) > 0:
             self.high_lr_optimizer = torch.optim.AdamW(
@@ -42,11 +48,8 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
             #        self.high_lr_optimizer, T_0=100, T_mult=2, eta_min=self.high_lr / 10
             #    )
             # )
-            # self.high_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            #    self.high_lr_optimizer, gamma=0.99925
-            # )
-            self.high_lr_scheduler = torch.optim.lr_scheduler.StepLR(
-                self.high_lr_optimizer, step_size=163, gamma=0.9
+            self.high_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                self.high_lr_optimizer, gamma=0.999
             )
         else:
             self.high_lr_optimizer = None
@@ -57,22 +60,9 @@ class UNet3PlusModel(nnet.protocols.ModelProtocol):
         # self.low_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         #    self.low_lr_optimizer, T_0=100, T_mult=2, eta_min=self.low_lr / 10
         # )
-        # self.low_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-        #    self.low_lr_optimizer, gamma=0.99925
-        # )
-        self.low_lr_scheduler = torch.optim.lr_scheduler.StepLR(
-            self.low_lr_optimizer, step_size=163, gamma=0.9
+        self.low_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self.low_lr_optimizer, gamma=0.999
         )
-        # self.low_lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-        #    self.low_lr_optimizer, start_factor=1, end_factor=0, total_iters=int(self.low_lr/1e-6)*150
-        # )
-
-    def get_loss(self, outputs, targets, ignore_index):
-        if isinstance(outputs, tuple):
-            return nnet.loss.seg_depth_comb_loss(outputs, targets, ignore_index)
-
-        targets = targets[0]
-        return nnet.loss.tversky_loss(outputs, targets, ignore_index)
 
     def train_one_step(
         self,
