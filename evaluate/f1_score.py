@@ -10,7 +10,8 @@ def f1_score(
     n_classes: int,
     ignore_index: int,
     epsilon: float = 1e-6,
-) -> float:
+    average_over_classes: bool = True,
+) -> float | np.ndarray:
     """Compute the F1 score."""
 
     if isinstance(pred, list):
@@ -43,6 +44,9 @@ def f1_score(
         ]
     )
 
+    if not average_over_classes:
+        return individual_f1_scores.numpy()
+
     return individual_f1_scores.mean().item()
 
 
@@ -60,3 +64,26 @@ def single_class_f1_score(
     f1 = 2 * tp / (2 * tp + fp + fn + epsilon)
 
     return f1
+
+
+def mean_dice(
+    pred: torch.Tensor | list[cort.CorticalPatch] | np.ndarray,
+    target: torch.Tensor | list[cort.CorticalPatch] | np.ndarray,
+    n_classes: int,
+    ignore_index: int,
+    epsilon: float = 1e-6,
+) -> float:
+    if isinstance(pred, list):
+        pred = np.stack([p.mask for p in pred])
+        target = np.stack([t.mask for t in target])
+
+    if isinstance(pred, np.ndarray):
+        pred = torch.from_numpy(pred)
+        target = torch.from_numpy(target)
+
+    f1_scores = [
+        f1_score(pred[None, ...], target[None, ...], n_classes, ignore_index, epsilon)
+        for pred, target in zip(pred, target)
+    ]
+
+    return np.mean(f1_scores)

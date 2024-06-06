@@ -1,4 +1,9 @@
 import numpy as np
+import pandas as pd
+import seaborn as sns
+from matplotlib import pyplot as plt
+
+import cort
 
 
 def confusion_matrix(
@@ -28,3 +33,26 @@ def confusion_matrix(
     conf_mat = conf_mat / np.sum(conf_mat, axis=1)[:, None]
 
     return conf_mat
+
+
+def show_confusion_matrix(
+    true_masks: np.ndarray,
+    pred_masks: np.ndarray,
+    title: str,
+    padding_value=cort.constants.PADDING_MASK_VALUE,
+):
+    conf_mat = confusion_matrix(true_masks, pred_masks, padding_value=padding_value)
+
+    labels = ["BG", "I", "II", "III", "IV", "V", "VI", "WM"]
+
+    conf_mat = pd.DataFrame(conf_mat, index=labels, columns=labels)
+
+    sns.set_theme(font_scale=1.4)  # for label size
+    ax = sns.heatmap(
+        conf_mat, annot=True, annot_kws={"size": 12}, fmt=".0%"
+    )  # font size
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+    ax.set_title(title)
+
+    plt.show()
