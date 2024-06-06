@@ -18,7 +18,7 @@ def load_patches_to_dataloader(
     shuffle: bool = False,
     condition: datasets.protocols.Condition | None = None,
 ) -> torch.utils.data.DataLoader:
-    """Create train, validation, and test loaders."""
+    """Create training, validation, and test loaders."""
     patches = datasets.load_split_patches(split, downscale_factor)
 
     dataset = datasets.PatchDataset(
