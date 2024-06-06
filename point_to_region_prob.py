@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 import cort.load
 
-CORT_BASE_DIR = "data/cort_patches"
+CORT_BASE_DIR = "data/all_cort_patches"
 
 
 def main():
@@ -16,11 +16,8 @@ def main():
     points = []
     for folder in cort_folders:
         image = nib.load(os.path.join(folder, "image.nii.gz"))
-        points.append(
-            siibra.Point((0, 0, 0), space="bigbrain").transform(
-                image.affine, "bigbrain"
-            )
-        )
+        vol = siibra.volumes.volume.from_nifti(image, space="bigbrain", name="point")
+        points.append(vol.get_boundingbox().center)
 
     julich_pmaps = siibra.get_map(
         parcellation="julich 2.9", space="mni152", maptype=siibra.MapType.STATISTICAL
@@ -33,7 +30,7 @@ def main():
             assignments = julich_pmaps.assign(point)
         cur_region_probs = {}
         for i, assignment in assignments.iterrows():
-            region = assignment["region"].parent.parent.parent.name
+            region = assignment["region"].parent.name
             if region not in cur_region_probs:
                 cur_region_probs[region] = []
             cur_region_probs[region].append(assignment["map value"])
