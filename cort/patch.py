@@ -1,10 +1,12 @@
 from dataclasses import dataclass
+import json
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 import cort.constants
 import cort.display
+import cort.depth
 
 
 @dataclass
@@ -13,6 +15,10 @@ class CorticalPatch:
 
     image: np.ndarray
     mask: np.ndarray
+    siibra_image: np.ndarray
+    siibra_mask: np.ndarray
+    matched_image: np.ndarray
+    siibra_depth_maps: np.ndarray
     inplane_resolution_micron: float
     section_thickness_micron: float
     brain_id: str
@@ -24,18 +30,44 @@ class CorticalPatch:
     z: float
     region_probs: np.ndarray
     borders: np.ndarray = None
+    depth_maps: np.ndarray = None
+    basic_matched_image: np.ndarray = None
+    basic_siibra_mask: np.ndarray = None
+    # border_flow_map: np.ndarray = None
 
     def __post_init__(self):
         """Post-initialization."""
         if self.image.shape != self.mask.shape:
             raise ValueError("Image and mask must have the same shape.")
 
-        self.borders = np.zeros((7, self.mask.shape[0], self.mask.shape[1]))
+        if self.borders is None:
+            self.borders = cort.depth.find_borders(self.mask)
 
-        offset_mask = np.roll(self.mask, -1, axis=0)
+        if self.depth_maps is None:
+            self.depth_maps = cort.depth.map_distance_from_border(
+                self.mask, self.borders
+            )
 
-        for i in range(7):
-            self.borders[i, (self.mask == i) & (offset_mask != i)] = 1
+        # if self.border_flow_map is None:
+        #    self.border_flow_map = cort.depth.create_border_flow_map(
+        #        self.mask, self.depth_maps
+        #    )
+
+    def __eq__(self, other):
+        """Check if two patches are equal."""
+        if not isinstance(other, CorticalPatch):
+            return False
+        return (
+            self.inplane_resolution_micron == other.inplane_resolution_micron
+            and self.section_thickness_micron == other.section_thickness_micron
+            and self.brain_id == other.brain_id
+            and self.section_id == other.section_id
+            and self.patch_id == other.patch_id
+            and self.brain_area == other.brain_area
+            and self.x == other.x
+            and self.y == other.y
+            and self.z == other.z
+        )
 
     @property
     def shape(self):
@@ -61,14 +93,88 @@ class CorticalPatch:
 
     @property
     def image_without_padding(self):
-        """Return the image without padding."""
+        """Return the image without padded."""
         unpadded_width = np.sum(self.mask[0, :] != cort.constants.PADDING_MASK_VALUE)
         unpadded_height = np.sum(self.mask[:, 0] != cort.constants.PADDING_MASK_VALUE)
         return self.image[:unpadded_height, :unpadded_width]
 
     @property
     def mask_without_padding(self):
-        """Return the mask without padding."""
+        """Return the mask without padded."""
         unpadded_width = np.sum(self.mask[0, :] != cort.constants.PADDING_MASK_VALUE)
         unpadded_height = np.sum(self.mask[:, 0] != cort.constants.PADDING_MASK_VALUE)
         return self.mask[:unpadded_height, :unpadded_width]
+
+    def save(self, folder):
+        """Save the patch to a folder."""
+        name = f"{self.brain_area}-{self.section_id}-{self.patch_id}"
+
+        images_stack = np.concatenate(
+            [
+                self.image[:, :, None],
+                self.mask[:, :, None],
+                # self.border_flow_map[:, :, None],
+                self.borders,
+                self.depth_maps,
+            ],
+            axis=2,
+        )
+
+        siibra_stack = np.concatenate(
+            [
+                self.siibra_image[:, :, None],
+                self.siibra_mask[:, :, None],
+                self.matched_image[:, :, None],
+                self.siibra_depth_maps,
+            ],
+            axis=2,
+        )
+
+        other_data = {
+            "inplane_resolution_micron": self.inplane_resolution_micron,
+            "section_thickness_micron": self.section_thickness_micron,
+            "brain_id": self.brain_id,
+            "section_id": self.section_id,
+            "patch_id": self.patch_id,
+            "brain_area": self.brain_area,
+            "x": self.x,
+            "y": self.y,
+            "z": self.z,
+            "region_probs": self.region_probs.tolist(),
+            "n_borders": self.borders.shape[2],
+            "n_depth_maps": self.depth_maps.shape[2],
+        }
+
+        np.save(f"{folder}/{name}_images.npy", images_stack)
+        np.save(f"{folder}/{name}_siibra.npy", siibra_stack)
+        with open(f"{folder}/{name}_data.json", "w") as f:
+            json.dump(other_data, f)
+
+    @classmethod
+    def load(cls, folder, name):
+        """Load a patch from a folder."""
+        images_stack = np.load(f"{folder}/{name}_images.npy")
+        siibra_stack = np.load(f"{folder}/{name}_siibra.npy")
+        with open(f"{folder}/{name}_data.json", "r") as f:
+            other_data = json.load(f)
+        return cls(
+            image=images_stack[:, :, 0],
+            mask=images_stack[:, :, 1],
+            siibra_image=siibra_stack[:, :, 0],
+            siibra_mask=siibra_stack[:, :, 1],
+            matched_image=siibra_stack[:, :, 2],
+            # border_flow_map=images_stack[:, :, 2],
+            borders=images_stack[:, :, 2 : 2 + other_data["n_borders"]],
+            depth_maps=images_stack[:, :, 2 + other_data["n_borders"] :],
+            siibra_depth_maps=siibra_stack[:, :, 3:],
+            inplane_resolution_micron=other_data["inplane_resolution_micron"],
+            section_thickness_micron=other_data["section_thickness_micron"],
+            brain_id=other_data["brain_id"],
+            section_id=other_data["section_id"],
+            patch_id=other_data["patch_id"],
+            brain_area=other_data["brain_area"],
+            x=other_data["x"],
+            y=other_data["y"],
+            z=other_data["z"],
+            region_probs=np.array(other_data["region_probs"]),
+        )
