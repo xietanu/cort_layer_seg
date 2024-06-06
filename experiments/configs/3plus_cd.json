@@ -1,0 +1,16 @@
+{
+  "base_model": "unet3+",
+  "conditional": true,
+  "depth_maps": true,
+  "embed_dim": 12,
+  "lr": 1e-4,
+  "dataset_config": {
+    "condition": "label"
+  },
+  "nnet_config": {
+    "base_channels":24,
+    "depth":5,
+    "dropout":0.0,
+    "hidden_embed_dim":64
+  }
+}
