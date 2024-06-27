@@ -11,7 +11,7 @@ AREA_MAPPING_PATH = "data/cort_patches/area_mapping.json"
 
 
 def calc_f1_for_patches(
-    model: nnet.protocols.ModelProtocol,
+    model: nnet.protocols.SegModelProtocol,
     patches: list[cort.CorticalPatch],
     conditional: bool = False,
     batch_size: int = 4,
