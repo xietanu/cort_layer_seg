@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -18,8 +19,8 @@ class TrainLog:
     val_accs: dict[int, float]
 
 
-def train_model(
-    model: nnet.protocols.ModelProtocol,
+def train_seg_model(
+    model: nnet.protocols.SegModelProtocol,
     train_dataloader,
     val_dataloader,
     n_epochs: int = 100,
@@ -54,11 +55,11 @@ def train_model(
             all_val_acc = []
             for _, val_input, val_target in val_dataloader:
                 inputs = (
-                    datasets.datatypes.DataInputs(*val_input)
+                    datasets.datatypes.SegInputs(*val_input)
                     if isinstance(val_input, (tuple, list))
                     else val_input
                 )
-                ground_truths = datasets.datatypes.GroundTruths(*val_target)
+                ground_truths = datasets.datatypes.SegGroundTruths(*val_target)
 
                 cur_val_loss, cur_val_acc, val_acc_err = model.validate(
                     inputs, ground_truths
@@ -76,8 +77,8 @@ def train_model(
             val_losses[step] = val_loss
             val_accs[step] = val_acc
 
-        batch_inputs = datasets.datatypes.DataInputs(*batch_input)
-        batch_gts = datasets.datatypes.GroundTruths(*batch_seg)
+        batch_inputs = datasets.datatypes.SegInputs(*batch_input)
+        batch_gts = datasets.datatypes.SegGroundTruths(*batch_seg)
 
         loss, acc, acc_err = model.train_one_step(batch_inputs, batch_gts)
 
@@ -94,11 +95,11 @@ def train_model(
     all_val_acc = []
     for _, val_input, val_target in val_dataloader:
         inputs = (
-            datasets.datatypes.DataInputs(*val_input)
+            datasets.datatypes.SegInputs(*val_input)
             if isinstance(val_input, (tuple, list))
             else val_input
         )
-        ground_truths = datasets.datatypes.GroundTruths(*val_target)
+        ground_truths = datasets.datatypes.SegGroundTruths(*val_target)
         cur_val_loss, cur_val_acc, val_acc_err = model.validate(inputs, ground_truths)
         all_val_loss.append(cur_val_loss)
         all_val_acc.append(cur_val_acc)

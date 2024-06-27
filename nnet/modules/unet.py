@@ -8,6 +8,7 @@ import nnet.modules.components
 class SemantSegUNet(torch.nn.Module):
     def __init__(
         self,
+        input_channels: int,
         encoder_map: list[list[int]],
         decoder_map: list[list[int]],
         num_classes: int,
@@ -15,6 +16,7 @@ class SemantSegUNet(torch.nn.Module):
         uses_condition: bool = False,
         uses_position: bool = False,
         uses_depth: bool = False,
+        uses_accuracy: bool = True,
         embed_dim: int = -1,
         hidden_embed_dim: int = -1,
     ):
@@ -22,6 +24,7 @@ class SemantSegUNet(torch.nn.Module):
 
         self.uses_condition = uses_condition
         self.uses_position = uses_position
+        self.uses_accuracy = uses_accuracy
         self.uses_depth = uses_depth
 
         if uses_condition:
@@ -58,7 +61,7 @@ class SemantSegUNet(torch.nn.Module):
             )
 
         self.input_conv = nnet.modules.components.ConvBlock(
-            in_channels=1, out_channels=encoder_map[0][0]
+            in_channels=input_channels, out_channels=encoder_map[0][0]
         )
 
         self.encoder_layers = torch.nn.ModuleList(
@@ -129,9 +132,13 @@ class SemantSegUNet(torch.nn.Module):
                 in_channels=decoder_map[0][-1], n_classes=num_classes
             )
 
-        self.accuracy_head = nnet.modules.components.BottomAccuracyHead(
-            in_channels=encoder_map[-1][-1]
-        )
+        if uses_accuracy:
+            # self.accuracy_head = nnet.modules.components.BottomAccuracyHead(
+            #    in_channels=encoder_map[-1][-1]
+            # )
+            self.accuracy_head = nnet.modules.components.AccuracyHead(
+                in_channels=num_classes
+            )
 
     def forward(
         self,
@@ -169,7 +176,9 @@ class SemantSegUNet(torch.nn.Module):
             for conv in self.encoder_layers[-1]:
                 x = conv(x)
 
-        accuracy = self.accuracy_head(x)
+        accuracy = None
+        # if self.uses_accuracy:
+        #    accuracy = self.accuracy_head(x)
 
         x = self.decoder_layers[-1](x)
 
@@ -184,7 +193,20 @@ class SemantSegUNet(torch.nn.Module):
 
         heads_output = self.head(x)
 
+        outputs = []
+
         if self.uses_depth:
-            return heads_output[0], accuracy, heads_output[1]
+            outputs.append(heads_output[0])
         else:
-            return heads_output, accuracy
+            outputs.append(heads_output)
+
+        if self.uses_accuracy:
+            accuracy = self.accuracy_head(outputs[0].detach().clone())
+            outputs.append(accuracy)
+
+        if self.uses_depth:
+            outputs.append(heads_output[1])
+
+        if len(outputs) == 1:
+            return outputs[0]
+        return tuple(outputs)

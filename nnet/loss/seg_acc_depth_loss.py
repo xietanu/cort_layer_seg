@@ -6,7 +6,7 @@ import torch
 
 def seg_acc_depth_loss(
     outputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-    ground_truths: datasets.datatypes.GroundTruths,
+    ground_truths: datasets.datatypes.SegGroundTruths,
     acc_gts: torch.Tensor,
     ignore_index: int,
 ) -> torch.Tensor:

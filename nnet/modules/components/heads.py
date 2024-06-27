@@ -60,12 +60,20 @@ class AccuracyHead(torch.nn.Module):
         super().__init__()
 
         self.conv = torch.nn.Sequential(
-            nnet.modules.components.DualConvBlock(in_channels, in_channels),
-            torch.nn.AdaptiveMaxPool2d((1, 1)),
+            nnet.modules.components.DualConvBlock(in_channels, in_channels * 2),
+            torch.nn.AdaptiveMaxPool2d((16, 16)),
+            nnet.modules.components.DualConvBlock(in_channels * 2, in_channels * 4),
+            torch.nn.MaxPool2d(2),  # 8x8
+            nnet.modules.components.DualConvBlock(in_channels * 4, in_channels * 8),
+            torch.nn.MaxPool2d(2),  # 4x4
+            nnet.modules.components.DualConvBlock(in_channels * 8, in_channels * 16),
+            torch.nn.MaxPool2d(2),  # 2x2
+            nnet.modules.components.DualConvBlock(in_channels * 16, in_channels * 32),
+            torch.nn.MaxPool2d(2),  # 1x1
         )
 
         self.flatten = torch.nn.Flatten()
-        self.fc = torch.nn.Linear(in_channels, in_channels)
+        self.fc = torch.nn.Linear(in_channels * 32, in_channels)
         self.relu = torch.nn.ReLU()
         self.output = torch.nn.Linear(in_channels, 1)
 

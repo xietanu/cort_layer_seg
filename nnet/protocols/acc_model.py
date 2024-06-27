@@ -7,15 +7,17 @@ import datasets
 import nnet.dataclasses
 
 
-class ModelProtocol(Protocol):
+class AccuracyModelProtocol(Protocol):
     step: int
     device: torch.device
 
     def train_one_step(
         self,
-        inputs: datasets.datatypes.DataInputs,
-        ground_truths: datasets.datatypes.GroundTruths,
-    ) -> tuple[float, float, float]:  # type: ignore
+        logits: torch.Tensor,
+        gt_segmentations: torch.Tensor,
+        probs: torch.Tensor | None = None,
+        locations: torch.Tensor | None = None,
+    ) -> tuple[float, float]:  # type: ignore
         """Train the model on one step."""
 
     def save(self, path: str):
@@ -30,13 +32,17 @@ class ModelProtocol(Protocol):
 
     def validate(
         self,
-        inputs: datasets.datatypes.DataInputs,
-        ground_truths: datasets.datatypes.GroundTruths,
-    ) -> tuple[float, float, float]:  # type: ignore
+        logits: torch.Tensor,
+        gt_segmentations: torch.Tensor,
+        probs: torch.Tensor | None = None,
+        locations: torch.Tensor | None = None,
+    ) -> tuple[float, float]:  # type: ignore
         """Validate the model."""
 
     def predict(
         self,
-        inputs: datasets.datatypes.DataInputs,
-    ) -> datasets.datatypes.Predictions:
+        logits: torch.Tensor,
+        probs: torch.Tensor | None = None,
+        locations: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Predict the outputs for given outputs."""

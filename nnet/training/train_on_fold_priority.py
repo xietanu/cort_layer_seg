@@ -9,7 +9,7 @@ TEMP_FILEPATH = "models/unet_temp.pth"
 
 
 def train_on_fold_priority(
-    model: nnet.protocols.ModelProtocol,
+    model: nnet.protocols.SegModelProtocol,
     fold: datasets.Fold,
     n_epochs: int = 100,
     save_name: str | None = None,

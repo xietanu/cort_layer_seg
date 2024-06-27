@@ -1,6 +1,3 @@
-from dataclasses import dataclass
-
-import numpy as np
 import torch
 
 import datasets.datatypes
@@ -11,7 +8,7 @@ import nnet.loss
 import evaluate
 
 
-class SemantSegUNetModel(nnet.protocols.ModelProtocol):
+class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
     """A U-Net model."""
 
     encoder_map: list[list[int]]
@@ -24,6 +21,7 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
     device: torch.device
     network: torch.nn.Module
     optimizer: torch.optim.Optimizer
+    denoise_model_name: str
 
     def __init__(
         self,
@@ -33,6 +31,7 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
         device: torch.device = torch.device("cuda"),
         dropout: float = 0.0,
         step: int = 0,
+        denoise_model_name: str | None = None,
         **network_kwargs,
     ):
         self.num_classes = num_classes
@@ -42,11 +41,23 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
         self.ignore_index = ignore_index
         self.dropout = dropout
         self.network_kwargs = network_kwargs
+        self.denoise_model_name = denoise_model_name
 
         self.network = nnet.modules.SemantSegUNet(
+            input_channels=1,
             **network_kwargs,
             num_classes=self.num_classes,
         ).to(self.device)
+
+        self.denoise_model = None
+
+        if self.denoise_model_name is not None:
+            self.denoise_model = nnet.models.DenoiseUNetModel.restore(
+                f"models/{self.denoise_model_name}.pth"
+            )
+            self.denoise_model.device = self.device
+            self.denoise_model.network.to(self.device)
+
         self.optimizer = torch.optim.Adam(
             self.network.parameters(), lr=self.learning_rate
         )
@@ -54,13 +65,13 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
         #    self.optimizer, step_size=163, gamma=0.96
         # )
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer, start_factor=1.0, end_factor=0.1, total_iters=163 * 50
+            self.optimizer, start_factor=1.0, end_factor=0.1, total_iters=163 * 100
         )
 
     def train_one_step(
         self,
-        inputs: datasets.datatypes.DataInputs,
-        ground_truths: datasets.datatypes.GroundTruths,
+        inputs: datasets.datatypes.SegInputs,
+        ground_truths: datasets.datatypes.SegGroundTruths,
     ) -> tuple[float, float, float]:
         """Train the model on one step."""
         self.network.train()
@@ -79,8 +90,8 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
 
     def validate(
         self,
-        inputs: datasets.datatypes.DataInputs,
-        ground_truths: datasets.datatypes.GroundTruths,
+        inputs: datasets.datatypes.SegInputs,
+        ground_truths: datasets.datatypes.SegGroundTruths,
     ) -> tuple[float, float, float]:
         """Validate the model."""
         self.network.eval()
@@ -91,8 +102,8 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
 
     def _calc_loss_acc(
         self,
-        inputs: datasets.datatypes.DataInputs,
-        ground_truths: datasets.datatypes.GroundTruths,
+        inputs: datasets.datatypes.SegInputs,
+        ground_truths: datasets.datatypes.SegGroundTruths,
     ) -> tuple[torch.Tensor, float, float]:
         inputs.to_device(self.device)
         ground_truths.to_device(self.device)
@@ -152,7 +163,7 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
 
     def predict(
         self,
-        inputs: datasets.datatypes.DataInputs,
+        inputs: datasets.datatypes.SegInputs,
         logits: bool = False,
     ) -> datasets.datatypes.Predictions:
         """Predict the model."""
@@ -176,11 +187,26 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
 
         labels = torch.argmax(seg_outputs, dim=1).detach().cpu().unsqueeze(1)
 
+        denoised_logits = None
+        denoised_labels = None
+        if self.denoise_model is not None:
+            if (
+                "uses_condition" in self.denoise_model.network_kwargs
+                and self.denoise_model.network_kwargs["uses_condition"]
+            ):
+                denoised_logits, denoised_labels = self.denoise_model.predict(
+                    logits, inputs.area_probabilities.float(), inputs.position.float()
+                )
+            else:
+                denoised_logits, denoised_labels = self.denoise_model.predict(logits)
+
         return datasets.datatypes.Predictions(
             segmentation=labels,
             accuracy=acc_outputs.detach().cpu(),
             depth_maps=(raw_ouputs[2].detach().cpu() if len(raw_ouputs) == 3 else None),
             logits=logits,
+            denoised_segementation=denoised_labels.detach().cpu(),
+            denoised_logits=denoised_logits.detach().cpu(),
         )
 
     def save(self, path: str):
@@ -195,6 +221,7 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
             "network": self.network.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
+            "denoise_model_name": self.denoise_model_name,
         }
         torch.save(checkpoint, path)
 
@@ -208,6 +235,7 @@ class SemantSegUNetModel(nnet.protocols.ModelProtocol):
             device=torch.device(checkpoint["device"]),
             ignore_index=checkpoint["ignore_index"],
             step=checkpoint["step"],
+            denoise_model_name=checkpoint["denoise_model_name"],
             **checkpoint["network_kwargs"],
         )
         model.network.load_state_dict(checkpoint["network"])
