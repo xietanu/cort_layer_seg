@@ -7,12 +7,14 @@ import cort
 import cort.load
 
 
-DATA_FOLDER = "data/cort_patches"
+DATA_FOLDER = "data/preprocessed"
 
 
 def main():
-    patch_paths = cort.load.find_all_patches(DATA_FOLDER)
-    patches = cort.load.load_patches(patch_paths, report_progress=True)
+    patch_paths = cort.load.find_all_preprocessed(DATA_FOLDER)
+    patches = cort.load.load_preprocessed_patches(
+        DATA_FOLDER, patch_paths, report_progress=True
+    )
 
     print(f"Loaded {len(patches)} patches.")
 

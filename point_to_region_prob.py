@@ -62,6 +62,9 @@ def main():
         filename = os.path.join(folder, "region_probs.npy")
         np.save(filename, prob)
 
+    with open(CORT_BASE_DIR + "/regions.txt", "w") as f:
+        f.write("\n".join(all_regions))
+
 
 if __name__ == "__main__":
     main()

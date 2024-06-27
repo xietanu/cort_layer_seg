@@ -1,4 +1,5 @@
 import argparse
+import torch
 
 import experiments
 
@@ -11,6 +12,8 @@ def main():
     parser.add_argument("--save_name", type=str, default=None)
     parser.add_argument("--continue_training", action="store_true")
     args = parser.parse_args()
+
+    torch.autograd.set_detect_anomaly(False)
 
     if args.fold == -1:
         experiments.run_experiment_on_all_folds(
