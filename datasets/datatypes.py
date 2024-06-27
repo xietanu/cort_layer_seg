@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import torch
@@ -52,7 +53,7 @@ class PatchInfos:
 
 
 @dataclass
-class DataInputs:
+class SegInputs:
     input_images: torch.Tensor
     area_probabilities: torch.Tensor | None = None
     position: torch.Tensor | None = None
@@ -84,10 +85,10 @@ class DataInputs:
             self.position = self.position.to(device)
 
     def __add__(self, other):
-        if not isinstance(other, DataInputs):
-            raise ValueError("other must be DataInputs")
+        if not isinstance(other, SegInputs):
+            raise ValueError("other must be SegInputs")
 
-        return DataInputs(
+        return SegInputs(
             input_images=torch.cat([self.input_images, other.input_images], dim=0),
             area_probabilities=(
                 torch.cat([self.area_probabilities, other.area_probabilities], dim=0)
@@ -122,7 +123,7 @@ class DataInputs:
             if "position.pt" in os.listdir(folder)
             else None
         )
-        return DataInputs(
+        return SegInputs(
             input_images=input_images,
             area_probabilities=area_probabilities,
             position=position,
@@ -130,9 +131,10 @@ class DataInputs:
 
 
 @dataclass
-class GroundTruths:
+class SegGroundTruths:
     segmentation: torch.Tensor
     depth_maps: torch.Tensor | None = None
+    prev_segmentation: torch.Tensor | None = None
 
     def __post_init__(self):
         if (
@@ -142,6 +144,11 @@ class GroundTruths:
             raise ValueError(
                 "depth_maps must have same number of samples as segmentation"
             )
+        if self.prev_segmentation is not None:
+            if self.prev_segmentation.shape[0] != self.segmentation.shape[0]:
+                raise ValueError(
+                    "prev_segmentation must have same number of samples as segmentation"
+                )
 
     def __len__(self):
         return self.segmentation.shape[0]
@@ -150,16 +157,23 @@ class GroundTruths:
         self.segmentation = self.segmentation.to(device)
         if self.depth_maps is not None:
             self.depth_maps = self.depth_maps.to(device)
+        if self.prev_segmentation is not None:
+            self.prev_segmentation = self.prev_segmentation.to(device)
 
     def __add__(self, other):
-        if not isinstance(other, GroundTruths):
-            raise ValueError("other must be GroundTruths")
+        if not isinstance(other, SegGroundTruths):
+            raise ValueError("other must be SegGroundTruths")
 
-        return GroundTruths(
+        return SegGroundTruths(
             segmentation=torch.cat([self.segmentation, other.segmentation], dim=0),
             depth_maps=(
                 torch.cat([self.depth_maps, other.depth_maps], dim=0)
                 if self.depth_maps is not None
+                else None
+            ),
+            prev_segmentation=(
+                torch.cat([self.prev_segmentation, other.prev_segmentation], dim=0)
+                if self.prev_segmentation is not None
                 else None
             ),
         )
@@ -169,6 +183,8 @@ class GroundTruths:
         torch.save(self.segmentation, f"{folder}/gt_segmentation.pt")
         if self.depth_maps is not None:
             torch.save(self.depth_maps, f"{folder}/gt_depth_maps.pt")
+        if self.prev_segmentation is not None:
+            torch.save(self.prev_segmentation, f"{folder}/gt_prev_segmentation.pt")
 
     @classmethod
     def load(cls, folder: str):
@@ -178,7 +194,16 @@ class GroundTruths:
             if "gt_depth_maps.pt" in os.listdir(folder)
             else None
         )
-        return GroundTruths(segmentation=segmentation, depth_maps=depth_maps)
+        prev_segmentation = (
+            torch.load(f"{folder}/gt_prev_segmentation.pt")
+            if "gt_prev_segmentation.pt" in os.listdir(folder)
+            else None
+        )
+        return SegGroundTruths(
+            segmentation=segmentation,
+            depth_maps=depth_maps,
+            prev_segmentation=prev_segmentation,
+        )
 
 
 @dataclass
@@ -187,6 +212,8 @@ class Predictions:
     logits: torch.Tensor
     accuracy: torch.Tensor
     depth_maps: torch.Tensor | None = None
+    denoised_segementation: torch.Tensor | None = None
+    denoised_logits: torch.Tensor | None = None
 
     def __post_init__(self):
         if (
@@ -195,6 +222,14 @@ class Predictions:
         ):
             raise ValueError(
                 "depth_maps must have same number of samples as segmentation"
+            )
+        if (
+            self.denoised_segementation is not None
+            and self.denoised_segementation.shape[0]
+            != self.denoised_segementation.shape[0]
+        ):
+            raise ValueError(
+                "denoised_segementation must have same number of samples as segmentation"
             )
         if self.accuracy.shape[0] != self.segmentation.shape[0]:
             raise ValueError(
@@ -212,6 +247,10 @@ class Predictions:
         self.accuracy = self.accuracy.to(device)
         if self.depth_maps is not None:
             self.depth_maps = self.depth_maps.to(device)
+        if self.denoised_segementation is not None:
+            self.denoised_segementation = self.denoised_segementation.to(device)
+        if self.denoised_logits is not None:
+            self.denoised_logits = self.denoised_logits.to(device)
 
     def __add__(self, other):
         if not isinstance(other, Predictions):
@@ -226,6 +265,18 @@ class Predictions:
                 if self.depth_maps is not None
                 else None
             ),
+            denoised_segementation=(
+                torch.cat(
+                    [self.denoised_segementation, other.denoised_segementation], dim=0
+                )
+                if self.denoised_segementation is not None
+                else None
+            ),
+            denoised_logits=(
+                torch.cat([self.denoised_logits, other.denoised_logits], dim=0)
+                if self.denoised_logits is not None
+                else None
+            ),
         )
 
     def save(self, folder: str):
@@ -235,6 +286,12 @@ class Predictions:
         torch.save(self.accuracy, f"{folder}/pred_accuracy.pt")
         if self.depth_maps is not None:
             torch.save(self.depth_maps, f"{folder}/pred_depth_maps.pt")
+        if self.denoised_segementation is not None:
+            torch.save(
+                self.denoised_segementation, f"{folder}/pred_denoised_segmentation.pt"
+            )
+        if self.denoised_logits is not None:
+            torch.save(self.denoised_logits, f"{folder}/pred_denoised_logits.pt")
 
     @classmethod
     def load(cls, folder: str):
@@ -246,11 +303,24 @@ class Predictions:
             if "pred_depth_maps.pt" in os.listdir(folder)
             else None
         )
+        denoised_segmentation = (
+            torch.load(f"{folder}/pred_denoised_segmentation.pt")
+            if "pred_denoised_segmentation.pt" in os.listdir(folder)
+            else None
+        )
+        denoised_logits = (
+            torch.load(f"{folder}/pred_denoised_logits.pt")
+            if "pred_denoised_logits.pt" in os.listdir(folder)
+            else None
+        )
+
         return Predictions(
             segmentation=segmentation,
             logits=logits,
             accuracy=accuracy,
             depth_maps=depth_maps,
+            denoised_segementation=denoised_segmentation,
+            denoised_logits=denoised_logits,
         )
 
     def to_list(self):
@@ -260,6 +330,16 @@ class Predictions:
                 logits=self.logits[i],
                 accuracy=self.accuracy[i].item(),
                 depth_map=(self.depth_maps[i] if self.depth_maps is not None else None),
+                denoised_segmentation=(
+                    self.denoised_segementation[i]
+                    if self.denoised_segementation is not None
+                    else None
+                ),
+                denoised_logits=(
+                    self.denoised_logits[i]
+                    if self.denoised_logits is not None
+                    else None
+                ),
             )
             for i in range(len(self))
         ]
@@ -276,6 +356,7 @@ class DataInput:
 class GroundTruth:
     segmentation: torch.Tensor
     depth_map: torch.Tensor | None = None
+    prev_segmentation: torch.Tensor | None = None
 
 
 @dataclass
@@ -284,13 +365,15 @@ class Prediction:
     logits: torch.Tensor
     accuracy: float
     depth_map: torch.Tensor | None = None
+    denoised_segmentation: torch.Tensor | None = None
+    denoised_logits: torch.Tensor | None = None
 
 
 @dataclass
 class PatchDataItems:
     patch_info: PatchInfos
-    data_inputs: DataInputs
-    ground_truths: GroundTruths
+    data_inputs: SegInputs
+    ground_truths: SegGroundTruths
     predictions: Predictions | None = None
 
     def __len__(self):
@@ -322,6 +405,11 @@ class PatchDataItems:
                     if self.ground_truths.depth_maps is not None
                     else None
                 ),
+                prev_segmentation=(
+                    self.ground_truths.prev_segmentation[idx]
+                    if self.ground_truths.prev_segmentation is not None
+                    else None
+                ),
             ),
             prediction=(
                 Prediction(
@@ -331,6 +419,16 @@ class PatchDataItems:
                     depth_map=(
                         self.predictions.depth_maps[idx]
                         if self.predictions.depth_maps is not None
+                        else None
+                    ),
+                    denoised_segmentation=(
+                        self.predictions.denoised_segementation[idx]
+                        if self.predictions.denoised_segementation is not None
+                        else None
+                    ),
+                    denoised_logits=(
+                        self.predictions.denoised_logits[idx]
+                        if self.predictions.denoised_logits is not None
                         else None
                     ),
                 )
@@ -364,8 +462,8 @@ class PatchDataItems:
     @classmethod
     def load(cls, folder: str):
         patch_info = PatchInfos.load(folder)
-        data_inputs = DataInputs.load(folder)
-        ground_truths = GroundTruths.load(folder)
+        data_inputs = SegInputs.load(folder)
+        ground_truths = SegGroundTruths.load(folder)
         predictions = (
             Predictions.load(folder)
             if "pred_segmentation.pt" in os.listdir(folder)
@@ -392,6 +490,77 @@ class PatchDataItems:
         ]
         idx = np.random.choice(idxs)
         return self[idx]
+
+    def filter(self, boolean_func: Callable):
+        keep_mask = [boolean_func(self[i]) for i in range(len(self))]
+        patch_info = PatchInfos(
+            brain_area=[
+                self.patch_info.brain_area[i] for i in range(len(self)) if keep_mask[i]
+            ],
+            section_id=[
+                self.patch_info.section_id[i] for i in range(len(self)) if keep_mask[i]
+            ],
+            patch_id=[
+                self.patch_info.patch_id[i] for i in range(len(self)) if keep_mask[i]
+            ],
+            fold=[self.patch_info.fold[i] for i in range(len(self)) if keep_mask[i]],
+        )
+        data_inputs = SegInputs(
+            input_images=self.data_inputs.input_images[keep_mask],
+            area_probabilities=(
+                self.data_inputs.area_probabilities[keep_mask]
+                if self.data_inputs.area_probabilities is not None
+                else None
+            ),
+            position=(
+                self.data_inputs.position[keep_mask]
+                if self.data_inputs.position is not None
+                else None
+            ),
+        )
+        ground_truths = SegGroundTruths(
+            segmentation=self.ground_truths.segmentation[keep_mask],
+            depth_maps=(
+                self.ground_truths.depth_maps[keep_mask]
+                if self.ground_truths.depth_maps is not None
+                else None
+            ),
+            prev_segmentation=(
+                self.ground_truths.prev_segmentation[keep_mask]
+                if self.ground_truths.prev_segmentation is not None
+                else None
+            ),
+        )
+        predictions = (
+            Predictions(
+                segmentation=self.predictions.segmentation[keep_mask],
+                logits=self.predictions.logits[keep_mask],
+                accuracy=self.predictions.accuracy[keep_mask],
+                depth_maps=(
+                    self.predictions.depth_maps[keep_mask]
+                    if self.predictions.depth_maps is not None
+                    else None
+                ),
+                denoised_segementation=(
+                    self.predictions.denoised_segementation[keep_mask]
+                    if self.predictions.denoised_segementation is not None
+                    else None
+                ),
+                denoised_logits=(
+                    self.predictions.denoised_logits[keep_mask]
+                    if self.predictions.denoised_logits is not None
+                    else None
+                ),
+            )
+            if self.predictions is not None
+            else None
+        )
+        return PatchDataItems(
+            patch_info=patch_info,
+            data_inputs=data_inputs,
+            ground_truths=ground_truths,
+            predictions=predictions,
+        )
 
 
 @dataclass
@@ -423,6 +592,26 @@ class PatchDataItem:
         return (
             cort.manip.unpad_img(
                 self.prediction.segmentation, self.ground_truth.segmentation
+            )
+            .squeeze()
+            .numpy()
+        )
+
+    @property
+    def pred_denoised_segmentation(self):
+        return (
+            cort.manip.unpad_img(
+                self.prediction.denoised_segmentation, self.ground_truth.segmentation
+            )
+            .squeeze()
+            .numpy()
+        )
+
+    @property
+    def existing_cort_layers(self):
+        return (
+            cort.manip.unpad_img(
+                self.ground_truth.prev_segmentation, self.ground_truth.segmentation
             )
             .squeeze()
             .numpy()

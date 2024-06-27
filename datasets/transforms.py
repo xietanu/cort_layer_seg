@@ -92,6 +92,16 @@ AUGMENTATIONS = transforms.Compose(
     ]
 )
 
+DENOISE_AUGMENTATIONS = transforms.Compose(
+    [
+        transforms.RandomHorizontalFlip(p=0.5),
+        RANDOM_ROTATION,
+        # RANDOM_PERSPECTIVE,
+        # ELASTIC_TRANSFORM,
+        # RANDOM_CROP,
+    ]
+)
+
 
 AUGMENTATIONS_IMG_ONLY = transforms.Compose(
     [

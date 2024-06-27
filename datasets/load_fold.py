@@ -14,6 +14,10 @@ def load_fold(
     use_position: bool = False,
     batch_size: int = 4,
     condition: datasets.protocols.Condition | None = None,
+    perc_siibra: float = 0.5,
+    roll: float = 0.75,
+    use_transforms: bool = True,
+    use_prev_seg_with_siibra: bool = False,
 ) -> datasets.Fold:
     """Load training, validation, and test dataloaders for a fold_data."""
 
@@ -50,12 +54,19 @@ def load_fold(
     train_dataset = datasets.PatchDataset(
         fold,
         train_patches,
-        datasets.transforms.AUGMENTATIONS,
+        (
+            datasets.transforms.AUGMENTATIONS
+            if use_transforms
+            else datasets.transforms.TO_TENSOR
+        ),
         condition=condition,
         provide_position=use_position,
-        img_transform=datasets.transforms.AUGMENTATIONS_IMG_ONLY,
-        percent_siibra=0.5,
-        roll=0.75,
+        img_transform=(
+            datasets.transforms.AUGMENTATIONS_IMG_ONLY if use_transforms else None
+        ),
+        percent_siibra=perc_siibra,
+        roll=roll,
+        use_prev_seg_with_siibra=use_prev_seg_with_siibra,
     )
     val_dataset = datasets.PatchDataset(
         fold,
@@ -63,8 +74,9 @@ def load_fold(
         datasets.transforms.TO_TENSOR,
         condition=condition,
         provide_position=use_position,
-        percent_siibra=0.5,
+        percent_siibra=perc_siibra,
         roll=0.0,
+        use_prev_seg_with_siibra=use_prev_seg_with_siibra,
     )
     test_dataset = datasets.PatchDataset(
         fold,
@@ -72,6 +84,7 @@ def load_fold(
         datasets.transforms.TO_TENSOR,
         condition=condition,
         provide_position=use_position,
+        use_prev_seg_with_siibra=use_prev_seg_with_siibra,
     )
     siibra_test_dataset = datasets.PatchDataset(
         fold,
@@ -80,6 +93,7 @@ def load_fold(
         condition=condition,
         provide_position=use_position,
         percent_siibra=1.0,
+        use_prev_seg_with_siibra=use_prev_seg_with_siibra,
     )
 
     train_loader = torch.utils.data.DataLoader(

@@ -21,6 +21,7 @@ class PatchDataset(torch.utils.data.Dataset):
         img_transform: torchvision.transforms.Compose | None = None,
         percent_siibra: float = 0.0,
         roll: float = 0.0,
+        use_prev_seg_with_siibra=False,
     ):
         self.fold = fold
         self.patches = patches
@@ -30,6 +31,7 @@ class PatchDataset(torch.utils.data.Dataset):
         self.provide_position = provide_position
         self.percent_siibra = percent_siibra
         self.roll = roll
+        self.use_prev_seg_with_siibra = use_prev_seg_with_siibra
 
         if isinstance(padded_size, tuple):
             self.padded_size = padded_size
@@ -44,20 +46,27 @@ class PatchDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         patch = self.patches[idx]
 
-        if np.random.rand() < self.percent_siibra:
-            image = patch.siibra_image
-            label = patch.siibra_mask
-            depth = patch.siibra_depth_maps
+        if np.random.rand() < self.percent_siibra and patch.siibra_imgs is not None:
+            image = patch.siibra_imgs.image
+            label = (
+                patch.siibra_imgs.mask
+                if not self.use_prev_seg_with_siibra
+                else patch.siibra_imgs.existing_cort_layers
+            )
+            depth = patch.siibra_imgs.depth_maps
+            prev_mask = patch.siibra_imgs.existing_cort_layers
         else:
             image = patch.image
             label = patch.mask
             depth = patch.depth_maps
+            prev_mask = np.zeros_like(label)
 
-        image, label, depth = [
-            center_pad_to_size(arr, self.padded_size) for arr in [image, label, depth]
+        image, label, depth, prev_mask = [
+            center_pad_to_size(arr, self.padded_size)
+            for arr in [image, label, depth, prev_mask]
         ]
 
-        image_label = np.stack((image, label), axis=-1)
+        image_label = np.stack((image, label, prev_mask), axis=-1)
 
         image_label_depth = np.concatenate((image_label, depth), axis=-1)
 
@@ -65,7 +74,8 @@ class PatchDataset(torch.utils.data.Dataset):
 
         image = transformed_image_and_label[None, 0, :, :]
         label = transformed_image_and_label[None, 1, :, :]
-        depth = transformed_image_and_label[2:, :, :]
+        prev_mask = transformed_image_and_label[None, 2, :, :]
+        depth = transformed_image_and_label[3:, :, :]
 
         image, label, depth = [
             center_pad_to_size_tensor(arr, self.padded_size)
@@ -82,22 +92,27 @@ class PatchDataset(torch.utils.data.Dataset):
             image = torch.roll(image, shifts=(y_roll, x_roll), dims=(1, 2))
             label = torch.roll(label, shifts=(y_roll, x_roll), dims=(1, 2))
             depth = torch.roll(depth, shifts=(y_roll, x_roll), dims=(1, 2))
+            prev_mask = torch.roll(prev_mask, shifts=(y_roll, x_roll), dims=(1, 2))
             if y_roll > 0:
                 image[:, :y_roll, :] = cort.constants.PADDING_MASK_VALUE
                 label[:, :y_roll, :] = cort.constants.PADDING_MASK_VALUE
                 depth[:, :y_roll, :] = cort.constants.PADDING_MASK_VALUE
+                prev_mask[:, :y_roll, :] = cort.constants.PADDING_MASK_VALUE
             elif y_roll < 0:
                 image[:, y_roll:, :] = cort.constants.PADDING_MASK_VALUE
                 label[:, y_roll:, :] = cort.constants.PADDING_MASK_VALUE
                 depth[:, y_roll:, :] = cort.constants.PADDING_MASK_VALUE
+                prev_mask[:, y_roll:, :] = cort.constants.PADDING_MASK_VALUE
             if x_roll > 0:
                 image[:, :, :x_roll] = cort.constants.PADDING_MASK_VALUE
                 label[:, :, :x_roll] = cort.constants.PADDING_MASK_VALUE
                 depth[:, :, :x_roll] = cort.constants.PADDING_MASK_VALUE
+                prev_mask[:, :, :x_roll] = cort.constants.PADDING_MASK_VALUE
             elif x_roll < 0:
                 image[:, :, x_roll:] = cort.constants.PADDING_MASK_VALUE
                 label[:, :, x_roll:] = cort.constants.PADDING_MASK_VALUE
                 depth[:, :, x_roll:] = cort.constants.PADDING_MASK_VALUE
+                prev_mask[:, :, x_roll:] = cort.constants.PADDING_MASK_VALUE
 
         label = label.round().long()
 
@@ -123,7 +138,7 @@ class PatchDataset(torch.utils.data.Dataset):
         return (
             (patch.brain_area, patch.section_id, patch.patch_id, self.fold),
             tuple(inputs),
-            (label, depth),
+            (label, depth, prev_mask),
         )
 
 
@@ -131,10 +146,10 @@ def find_min_padding_size(
     patches: list[cort.CorticalPatch], factor: int
 ) -> tuple[int, int]:
     max_width = np.max(
-        [max(patch.image.shape[1], patch.siibra_image.shape[1]) for patch in patches]
+        [max(patch.image.shape[1], patch.siibra_imgs.image.shape[1]) for patch in patches]
     )
     max_height = np.max(
-        [max(patch.image.shape[0], patch.siibra_image.shape[0]) for patch in patches]
+        [max(patch.image.shape[0], patch.siibra_imgs.image.shape[0]) for patch in patches]
     )
     pad_width = int(np.ceil(max_width / factor) * factor)
     pad_height = int(np.ceil(max_height / factor) * factor)

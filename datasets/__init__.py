@@ -17,3 +17,4 @@ from datasets.lookup import dataset_conditions_lookup
 
 from datasets.priority_loader import PriorityLoader
 from datasets.load_fold_priority import load_fold_priority
+from datasets.denoise_dataset import DenoiseDataset
