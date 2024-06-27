@@ -17,44 +17,37 @@ def predict_from_model(
     fold: int,
     fold_data: datasets.Fold,
     outputs_path: str,
-    model: nnet.protocols.ModelProtocol | None = None,
+    model: nnet.protocols.SegModelProtocol | None = None,
     train_log: nnet.training.TrainLog | None = None,
 ):
     if model is None:
         model = nnet.models.SemantSegUNetModel.restore(TEMP_MODEL)
 
-    print("Saving training logs...")
-    os.makedirs((os.path.join(outputs_path, "logs")), exist_ok=True)
-    json.dump(
-        train_log.train_losses,
-        open(os.path.join(outputs_path, "logs", "train_losses.json"), "w"),
-    )
-    json.dump(
-        train_log.val_losses,
-        open(os.path.join(outputs_path, "logs", "val_losses.json"), "w"),
-    )
-    json.dump(
-        train_log.train_accs,
-        open(os.path.join(outputs_path, "logs", "train_accs.json"), "w"),
-    )
-    json.dump(
-        train_log.val_accs,
-        open(os.path.join(outputs_path, "logs", "val_accs.json"), "w"),
-    )
+    if train_log is not None:
+        print("Saving training logs...")
+        os.makedirs((os.path.join(outputs_path, "logs")), exist_ok=True)
+        json.dump(
+            train_log.train_losses,
+            open(os.path.join(outputs_path, "logs", "train_losses.json"), "w"),
+        )
+        json.dump(
+            train_log.val_losses,
+            open(os.path.join(outputs_path, "logs", "val_losses.json"), "w"),
+        )
+        json.dump(
+            train_log.train_accs,
+            open(os.path.join(outputs_path, "logs", "train_accs.json"), "w"),
+        )
+        json.dump(
+            train_log.val_accs,
+            open(os.path.join(outputs_path, "logs", "val_accs.json"), "w"),
+        )
 
     print("Predicting test set...")
     base_results = get_seg_output_for_loader(model, fold_data.test_dataloader)
     print("Saving test set results...")
     os.makedirs(os.path.join(outputs_path, "test"), exist_ok=True)
     base_results.save(os.path.join(outputs_path, "test"))
-
-    # print("Predicting transposed test set...")
-    # transposed_results = get_seg_output_for_loader(
-    #    model, fold_data.test_dataloader, transpose=True
-    # )
-    # print("Saving transposed test set results...")
-    # os.makedirs(os.path.join(outputs_path, "test_transposed"), exist_ok=True)
-    # transposed_results.save(os.path.join(outputs_path, "test_transposed"))
 
     print("Predicting on Siibra patches test set...")
     siibra_results = get_seg_output_for_loader(model, fold_data.siibra_test_dataloader)
@@ -66,7 +59,7 @@ def predict_from_model(
 
 
 def get_seg_output_for_loader(
-    model: nnet.protocols.ModelProtocol,
+    model: nnet.protocols.SegModelProtocol,
     loader: torch.utils.data.DataLoader,
     transpose: bool = False,
 ) -> datasets.datatypes.PatchDataItems:
@@ -81,8 +74,8 @@ def get_seg_output_for_loader(
             patch_id=batch_info[2].detach().cpu().numpy().tolist(),
             fold=batch_info[3].detach().cpu().numpy().tolist(),
         )
-        batch_inputs = datasets.datatypes.DataInputs(*batch_inputs)
-        batch_gt = datasets.datatypes.GroundTruths(*batch_gt)
+        batch_inputs = datasets.datatypes.SegInputs(*batch_inputs)
+        batch_gt = datasets.datatypes.SegGroundTruths(*batch_gt)
         if transpose:
             batch_inputs.input_images = batch_inputs.input_images.transpose(2, 3)
 
