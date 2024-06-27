@@ -59,7 +59,7 @@ def load_patch(folder_path: str, downscale: float = 1) -> cort.CorticalPatch:
         x=coords[1],
         z=coords[2],
         region_probs=region_probs,
-        siibra_images=siibra_images,
+        siibra_imgs=siibra_images,
         **data,
     )
 

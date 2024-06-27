@@ -146,10 +146,16 @@ def find_min_padding_size(
     patches: list[cort.CorticalPatch], factor: int
 ) -> tuple[int, int]:
     max_width = np.max(
-        [max(patch.image.shape[1], patch.siibra_imgs.image.shape[1]) for patch in patches]
+        [
+            max(patch.image.shape[1], patch.siibra_imgs.image.shape[1])
+            for patch in patches
+        ]
     )
     max_height = np.max(
-        [max(patch.image.shape[0], patch.siibra_imgs.image.shape[0]) for patch in patches]
+        [
+            max(patch.image.shape[0], patch.siibra_imgs.image.shape[0])
+            for patch in patches
+        ]
     )
     pad_width = int(np.ceil(max_width / factor) * factor)
     pad_height = int(np.ceil(max_height / factor) * factor)
