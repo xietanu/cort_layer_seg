@@ -162,9 +162,9 @@ class CorticalPatch:
                 existing_cort_layers=prev_mask,
                 mask=siibra_stack[:, :, 1],
                 matched_image=siibra_stack[:, :, 2],
-                depth_maps=siibra_stack[:, :, 3:],
-                affine_matched_image=siibra_stack[:, :, 4],
-                affine_mask=siibra_stack[:, :, 5],
+                depth_maps=siibra_stack[:, :, 5:],
+                affine_matched_image=siibra_stack[:, :, 3],
+                affine_mask=siibra_stack[:, :, 4],
             )
         with open(f"{folder}/{name}_data.json", "r") as f:
             other_data = json.load(f)
