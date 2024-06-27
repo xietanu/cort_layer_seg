@@ -1,9 +1,11 @@
+import os
 from dataclasses import dataclass
 import json
 
 import numpy as np
 import matplotlib.pyplot as plt
 
+import cort
 import cort.constants
 import cort.display
 import cort.depth
@@ -15,10 +17,6 @@ class CorticalPatch:
 
     image: np.ndarray
     mask: np.ndarray
-    siibra_image: np.ndarray
-    siibra_mask: np.ndarray
-    matched_image: np.ndarray
-    siibra_depth_maps: np.ndarray
     inplane_resolution_micron: float
     section_thickness_micron: float
     brain_id: str
@@ -31,9 +29,7 @@ class CorticalPatch:
     region_probs: np.ndarray
     borders: np.ndarray = None
     depth_maps: np.ndarray = None
-    basic_matched_image: np.ndarray = None
-    basic_siibra_mask: np.ndarray = None
-    # border_flow_map: np.ndarray = None
+    siibra_imgs: cort.SiibraImages | None = None
 
     def __post_init__(self):
         """Post-initialization."""
@@ -47,11 +43,6 @@ class CorticalPatch:
             self.depth_maps = cort.depth.map_distance_from_border(
                 self.mask, self.borders
             )
-
-        # if self.border_flow_map is None:
-        #    self.border_flow_map = cort.depth.create_border_flow_map(
-        #        self.mask, self.depth_maps
-        #    )
 
     def __eq__(self, other):
         """Check if two patches are equal."""
@@ -120,15 +111,19 @@ class CorticalPatch:
             axis=2,
         )
 
-        siibra_stack = np.concatenate(
-            [
-                self.siibra_image[:, :, None],
-                self.siibra_mask[:, :, None],
-                self.matched_image[:, :, None],
-                self.siibra_depth_maps,
-            ],
-            axis=2,
-        )
+        siibra_stack = None
+        if self.siibra_imgs is not None:
+            siibra_stack = np.concatenate(
+                [
+                    self.siibra_imgs.image[:, :, None],
+                    self.siibra_imgs.mask[:, :, None],
+                    self.siibra_imgs.matched_image[:, :, None],
+                    self.siibra_imgs.affine_matched_image[:, :, None],
+                    self.siibra_imgs.affine_mask[:, :, None],
+                    self.siibra_imgs.depth_maps,
+                ],
+                axis=2,
+            )
 
         other_data = {
             "inplane_resolution_micron": self.inplane_resolution_micron,
@@ -146,7 +141,11 @@ class CorticalPatch:
         }
 
         np.save(f"{folder}/{name}_images.npy", images_stack)
-        np.save(f"{folder}/{name}_siibra.npy", siibra_stack)
+        if siibra_stack is not None:
+            np.save(f"{folder}/{name}_siibra.npy", siibra_stack)
+            np.save(
+                f"{folder}/{name}_prev_mask.npy", self.siibra_imgs.existing_cort_layers
+            )
         with open(f"{folder}/{name}_data.json", "w") as f:
             json.dump(other_data, f)
 
@@ -154,19 +153,26 @@ class CorticalPatch:
     def load(cls, folder, name):
         """Load a patch from a folder."""
         images_stack = np.load(f"{folder}/{name}_images.npy")
-        siibra_stack = np.load(f"{folder}/{name}_siibra.npy")
+        siibra_imgs = None
+        if os.path.exists(f"{folder}/{name}_siibra.npy"):
+            siibra_stack = np.load(f"{folder}/{name}_siibra.npy")
+            prev_mask = np.load(f"{folder}/{name}_prev_mask.npy")
+            siibra_imgs = cort.SiibraImages(
+                image=siibra_stack[:, :, 0],
+                existing_cort_layers=prev_mask,
+                mask=siibra_stack[:, :, 1],
+                matched_image=siibra_stack[:, :, 2],
+                depth_maps=siibra_stack[:, :, 3:],
+                affine_matched_image=siibra_stack[:, :, 4],
+                affine_mask=siibra_stack[:, :, 5],
+            )
         with open(f"{folder}/{name}_data.json", "r") as f:
             other_data = json.load(f)
         return cls(
             image=images_stack[:, :, 0],
             mask=images_stack[:, :, 1],
-            siibra_image=siibra_stack[:, :, 0],
-            siibra_mask=siibra_stack[:, :, 1],
-            matched_image=siibra_stack[:, :, 2],
-            # border_flow_map=images_stack[:, :, 2],
             borders=images_stack[:, :, 2 : 2 + other_data["n_borders"]],
             depth_maps=images_stack[:, :, 2 + other_data["n_borders"] :],
-            siibra_depth_maps=siibra_stack[:, :, 3:],
             inplane_resolution_micron=other_data["inplane_resolution_micron"],
             section_thickness_micron=other_data["section_thickness_micron"],
             brain_id=other_data["brain_id"],
@@ -177,4 +183,5 @@ class CorticalPatch:
             y=other_data["y"],
             z=other_data["z"],
             region_probs=np.array(other_data["region_probs"]),
+            siibra_imgs=siibra_imgs,
         )
