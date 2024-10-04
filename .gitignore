@@ -2,7 +2,9 @@
 .vscode/
 
 #Data
-data/
+/data/
+/models/
+/experiments/results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
