@@ -8,7 +8,7 @@ import nnet.loss
 import evaluate
 
 
-class AccModel(nnet.protocols.AccuracyModelProtocol):
+class AccuracyModel(nnet.protocols.AccuracyModelProtocol):
     """A U-Net model."""
 
     encoder_map: list[list[int]]
@@ -40,9 +40,7 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
 
         self.network = nnet.modules.ImgRegressor(
             input_channels=self.num_classes,
-            uses_accuracy=False,
             **network_kwargs,
-            num_classes=self.num_classes,
         ).to(self.device)
         self.optimizer = torch.optim.Adam(
             self.network.parameters(), lr=self.learning_rate
@@ -51,7 +49,7 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
         #    self.optimizer, step_size=163, gamma=0.96
         # )
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer, start_factor=1.0, end_factor=0.1, total_iters=163 * 50
+            self.optimizer, start_factor=1.0, end_factor=0.1, total_iters=166 * 10 * 2
         )
 
     def train_one_step(
@@ -60,12 +58,12 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
         gt_segmentations: torch.Tensor,
         probs: torch.Tensor | None = None,
         locations: torch.Tensor | None = None,
-    ) -> tuple[float, float]:
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         """Train the model on one step."""
         self.network.train()
         self.optimizer.zero_grad()
 
-        loss, accuracy = self._calc_loss_acc(logits,gt_segmentations, probs, locations)
+        loss, accuracy = self._calc_loss_acc(logits, gt_segmentations, probs, locations)
 
         loss.backward()
 
@@ -74,7 +72,7 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
 
         self.step += 1
 
-        return loss.item(), accuracy
+        return loss.detach().cpu(), accuracy
 
     def validate(
         self,
@@ -82,13 +80,13 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
         gt_segmentations: torch.Tensor,
         probs: torch.Tensor | None = None,
         locations: torch.Tensor | None = None,
-    ) -> tuple[float, float]:
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         """Validate the model."""
         self.network.eval()
 
         loss, accuracy = self._calc_loss_acc(logits, gt_segmentations, probs, locations)
 
-        return loss.item(), accuracy
+        return loss.detach().cpu(), accuracy
 
     def _calc_loss_acc(
         self,
@@ -96,35 +94,29 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
         gt_segmentations: torch.Tensor,
         probs: torch.Tensor | None = None,
         locations: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, float]:
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         logits = logits.to(self.device).float()
         probs = probs.to(self.device).float() if probs is not None else None
         locations = locations.to(self.device).float() if locations is not None else None
+        gt_segmentations = gt_segmentations.to(self.device)
 
         gts = []
         for lgts, gt in zip(logits, gt_segmentations):
             seg = torch.argmax(lgts, dim=0)
-            f1 = evaluate.f1_score(seg, gt, self.num_classes, self.ignore_index)
-            gts.append(torch.tensor(f1))
+            f1 = evaluate.f1_score(
+                seg[None, :, :], gt[None, :, :], self.num_classes, self.ignore_index
+            )
+            gts.append(torch.tensor(f1, device=self.device))
 
-        gts = torch.stack(gts)
+        gt_acc = torch.stack(gts)
 
+        pred_acc = self.network(logits, probs, locations)
 
-        seg_outputs = self.network(logits, probs, locations)
+        acc_loss = torch.nn.functional.mse_loss(pred_acc.squeeze(), gt_acc.squeeze())
+        accuracy = torch.mean(torch.abs(pred_acc - gt_acc)).item()
 
-        label_outputs = torch.argmax(seg_outputs, dim=1)
-
-        label_outputs[gt_segmentations.squeeze(1) == self.ignore_index] = (
-            self.ignore_index
-        )
-
-        accuracy = torch.
-
-        loss = nnet.loss.tversky_loss(
-            seg_outputs,
-            gt_segmentation,
-            ignore_index=self.ignore_index,
-        )
+        loss = nnet.loss.CombinedLoss()
+        loss.add(nnet.protocols.LossType.ACCURACY_ESTIMATE, acc_loss)
 
         return loss, accuracy
 
@@ -133,7 +125,7 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
         logits: torch.Tensor,
         probs: torch.Tensor | None = None,
         locations: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         """Predict the model."""
         self.network.eval()
 
@@ -141,11 +133,7 @@ class AccModel(nnet.protocols.AccuracyModelProtocol):
         probs = probs.to(self.device).float() if probs is not None else None
         locations = locations.to(self.device).float() if locations is not None else None
 
-        seg_outputs = self.network(logits, probs, locations)
-
-        labels = torch.argmax(seg_outputs, dim=1).detach().cpu().unsqueeze(1)
-
-        return seg_outputs.detach().cpu(), labels
+        return self.network(logits, probs, locations).detach().cpu().squeeze()
 
     def save(self, path: str):
         """Save the model to a file."""

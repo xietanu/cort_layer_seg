@@ -3,9 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 from tqdm import tqdm
 
-import datasets.datatypes
 import nnet.protocols
-import nnet.loss
 
 
 @dataclass
@@ -16,7 +14,7 @@ class TrainLog:
     val_accs: dict[int, float]
 
 
-def train_denoise_model(
+def train_accuracy_model(
     model: nnet.protocols.DenoiseModelProtocol,
     train_dataloader,
     val_dataloader,
@@ -32,7 +30,7 @@ def train_denoise_model(
 
     step_rep = tqdm(range(n_steps))
 
-    val_loss = nnet.loss.CombinedLoss()
+    val_loss = 0
     val_acc = 0
 
     best_val_loss = np.inf
@@ -47,11 +45,10 @@ def train_denoise_model(
                 logits = inputs
                 probs = None
                 locations = None
-            inputs = datasets.datatypes.SegInputs(logits, probs, locations)
-            loss, acc = model.train_one_step(inputs, seg_gt)
+            loss, acc = model.train_one_step(logits, seg_gt, probs, locations)
             lr = model.optimizer.param_groups[0]["lr"]
             step_rep.set_description(
-                f"LR: {lr:.6f} | Loss: {loss.total:.4f}, Acc: {acc:.1%}| Val Loss: {val_loss.total:.4f}, Val Acc: {val_acc:.1%}"
+                f"LR: {lr:.6f} | Loss: {loss.total:.4f}, Acc: {acc:.1%}| Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.1%}"
             )
             step_rep.update(1)
             step += 1
@@ -68,19 +65,18 @@ def train_denoise_model(
                 logits = inputs
                 probs = None
                 locations = None
-            inputs = datasets.datatypes.SegInputs(logits, probs, locations)
-            cur_val_loss, cur_val_acc = model.validate(inputs, seg_gt)
+            cur_val_loss, cur_val_acc = model.validate(logits, seg_gt, probs, locations)
 
-            all_val_loss.append(cur_val_loss)
+            all_val_loss.append(cur_val_loss.total.item())
             all_val_acc.append(cur_val_acc)
-        val_loss = nnet.loss.CombinedLoss.mean(all_val_loss)
+        val_loss = np.mean(all_val_loss)
         val_acc = np.mean(all_val_acc)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             model.save(f"models/{save_name}.pth")
 
-        val_losses[step] = val_loss.total.item()
+        val_losses[step] = val_loss
         val_accs[step] = val_acc
 
     step_rep.close()

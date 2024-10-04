@@ -17,3 +17,5 @@ from nnet.modules.components.heads import (
     SegAccDepthHead,
     BottomAccuracyHead,
 )
+from nnet.modules.components.resnet_block import ResNetBlock
+from nnet.modules.components.auto_decoder import AutoDecoder

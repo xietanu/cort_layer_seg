@@ -41,7 +41,7 @@ class DenoiseUNetModel(nnet.protocols.DenoiseModelProtocol):
 
         self.network = nnet.modules.SemantSegUNet(
             input_channels=self.num_classes,
-            uses_accuracy=False,
+            use_linear_bridge=False,
             **network_kwargs,
             num_classes=self.num_classes,
         ).to(self.device)
@@ -51,22 +51,22 @@ class DenoiseUNetModel(nnet.protocols.DenoiseModelProtocol):
         # self.scheduler = torch.optim.lr_scheduler.StepLR(
         #    self.optimizer, step_size=163, gamma=0.96
         # )
-        self.scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer, start_factor=1.0, end_factor=0.1, total_iters=163 * 20
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=362 * 100,
+            eta_min=learning_rate * 0.3,
         )
 
     def train_one_step(
         self,
-        logits: torch.Tensor,
+        inputs: datasets.datatypes.SegInputs,
         gt_segmentation: torch.Tensor,
-        probs: torch.Tensor | None = None,
-        locations: torch.Tensor | None = None,
-    ) -> tuple[float, float]:
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         """Train the model on one step."""
         self.network.train()
         self.optimizer.zero_grad()
 
-        loss, accuracy = self._calc_loss_acc(logits, gt_segmentation, probs, locations)
+        loss, accuracy = self._calc_loss_acc(inputs, gt_segmentation)
 
         loss.backward()
 
@@ -75,37 +75,31 @@ class DenoiseUNetModel(nnet.protocols.DenoiseModelProtocol):
 
         self.step += 1
 
-        return loss.item(), accuracy
+        return loss.detach().cpu(), accuracy
 
     def validate(
         self,
-        logits: torch.Tensor,
+        inputs: datasets.datatypes.SegInputs,
         gt_segmentation: torch.Tensor,
-        probs: torch.Tensor | None = None,
-        locations: torch.Tensor | None = None,
-    ) -> tuple[float, float]:
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         """Validate the model."""
         self.network.eval()
 
-        loss, accuracy = self._calc_loss_acc(logits, gt_segmentation, probs, locations)
+        loss, accuracy = self._calc_loss_acc(inputs, gt_segmentation)
 
-        return loss.item(), accuracy
+        return loss.detach().cpu(), accuracy
 
     def _calc_loss_acc(
         self,
-        logits: torch.Tensor,
+        inputs: datasets.datatypes.SegInputs,
         gt_segmentation: torch.Tensor,
-        probs: torch.Tensor | None = None,
-        locations: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, float]:
-        logits = logits.to(self.device).float()
-        probs = probs.to(self.device).float() if probs is not None else None
-        locations = locations.to(self.device).float() if locations is not None else None
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
+        inputs.to_device(self.device)
         gt_segmentation = gt_segmentation.to(self.device)
 
-        seg_outputs = self.network(logits, probs, locations)
+        seg_outputs = self.network(inputs)
 
-        label_outputs = torch.argmax(seg_outputs, dim=1)
+        label_outputs = torch.argmax(seg_outputs.logits, dim=1)
 
         label_outputs[gt_segmentation.squeeze(1) == self.ignore_index] = (
             self.ignore_index
@@ -118,11 +112,16 @@ class DenoiseUNetModel(nnet.protocols.DenoiseModelProtocol):
             ignore_index=self.ignore_index,
         )
 
-        loss = nnet.loss.tversky_loss(
-            seg_outputs,
+        denoise_loss = nnet.loss.tversky_loss(
+            seg_outputs.logits,
             gt_segmentation,
             ignore_index=self.ignore_index,
+            alpha=0.4,
+            beta=0.6,
         )
+
+        loss = nnet.loss.CombinedLoss()
+        loss.add(nnet.protocols.LossType.DENOISE, denoise_loss)
 
         return loss, accuracy
 
@@ -139,11 +138,13 @@ class DenoiseUNetModel(nnet.protocols.DenoiseModelProtocol):
         probs = probs.to(self.device).float() if probs is not None else None
         locations = locations.to(self.device).float() if locations is not None else None
 
-        seg_outputs = self.network(logits, probs, locations)
+        seg_outputs = self.network(
+            datasets.datatypes.SegInputs(logits, probs, locations)
+        )
 
-        labels = torch.argmax(seg_outputs, dim=1).detach().cpu().unsqueeze(1)
+        labels = torch.argmax(seg_outputs.logits, dim=1).detach().cpu().unsqueeze(1)
 
-        return seg_outputs.detach().cpu(), labels
+        return seg_outputs.logits.detach().cpu(), labels
 
     def save(self, path: str):
         """Save the model to a file."""

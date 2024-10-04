@@ -11,3 +11,4 @@ from nnet.modules.nnet_cond import ConditionalNNet
 # from nnet.modules.unet_3plus import ConditionalDepthUNet3Plus
 # from nnet.modules.unet_3plus_depth import DepthUNet3Plus
 from nnet.modules.unet_3plus import UNet3Plus
+from nnet.modules.img_regressor import ImgRegressor

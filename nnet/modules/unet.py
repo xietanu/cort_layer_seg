@@ -1,8 +1,17 @@
 import itertools
+from dataclasses import dataclass
 
 import torch
+import datasets
 
 import nnet.modules.components
+
+
+@dataclass
+class SegModuleOutput:
+    logits: torch.Tensor
+    depth_maps: torch.Tensor | None = None
+    autoencoded_imgs: torch.Tensor | None = None
 
 
 class SemantSegUNet(torch.nn.Module):
@@ -12,20 +21,24 @@ class SemantSegUNet(torch.nn.Module):
         encoder_map: list[list[int]],
         decoder_map: list[list[int]],
         num_classes: int,
+        input_image_size: tuple[int, int] = None,
         dropout: float = 0.0,
         uses_condition: bool = False,
         uses_position: bool = False,
         uses_depth: bool = False,
-        uses_accuracy: bool = True,
         embed_dim: int = -1,
         hidden_embed_dim: int = -1,
+        use_linear_bridge: bool = False,
+        autoencode: bool = False,
     ):
         super().__init__()
 
         self.uses_condition = uses_condition
         self.uses_position = uses_position
-        self.uses_accuracy = uses_accuracy
         self.uses_depth = uses_depth
+        self.input_img_size = input_image_size
+        self.use_linear_bridge = use_linear_bridge
+        self.autoencode = autoencode
 
         if uses_condition:
             if embed_dim == -1:
@@ -72,7 +85,7 @@ class SemantSegUNet(torch.nn.Module):
                             nnet.modules.components.ConvBlock(
                                 in_channels=in_channels,
                                 out_channels=out_channels,
-                                kernel_size=3 if i > 0 else 5,
+                                kernel_size=3,
                                 padding="same",
                             )
                             if not uses_condition and not uses_position
@@ -80,7 +93,7 @@ class SemantSegUNet(torch.nn.Module):
                                 in_channels=in_channels,
                                 out_channels=out_channels,
                                 embedding_dim=hidden_embed_dim,
-                                kernel_size=3 if i > 0 else 5,
+                                kernel_size=3,
                                 padding="same",
                             )
                         )
@@ -92,6 +105,60 @@ class SemantSegUNet(torch.nn.Module):
                 for layer in encoder_map
             ]
         )
+
+        if self.use_linear_bridge:
+            if input_image_size is None:
+                raise ValueError(
+                    "Input image size must be specified when using a linear bridge."
+                )
+
+            downscale_factor = 2 ** (len(encoder_map) - 1)
+
+            if (
+                input_image_size[0] % downscale_factor != 0
+                or input_image_size[1] % downscale_factor != 0
+            ):
+                raise ValueError(
+                    f"Input image size ({input_image_size}) must be divisible by the downscale factor ({downscale_factor})"
+                )
+
+            bottle_img_size = (
+                input_image_size[0] // downscale_factor,
+                input_image_size[1] // downscale_factor,
+            )
+
+            encoder_end_channels = encoder_map[-1][-1]
+            decoder_start_channels = decoder_map[-1][0]
+            encoder_end_size = (
+                encoder_end_channels * bottle_img_size[0] * bottle_img_size[1]
+            )
+            decoder_start_size = (
+                decoder_start_channels * bottle_img_size[0] * bottle_img_size[1]
+            )
+
+            self.linear_bridge = torch.nn.Sequential(
+                torch.nn.Flatten(),
+                torch.nn.Linear(
+                    encoder_end_size,
+                    decoder_start_channels,
+                ),
+                torch.nn.ReLU(),
+                torch.nn.Linear(decoder_start_channels, decoder_start_channels),
+                torch.nn.ReLU(),
+                torch.nn.Linear(
+                    decoder_start_channels,
+                    decoder_start_size,
+                ),
+                torch.nn.ReLU(),
+                torch.nn.Unflatten(
+                    1,
+                    (
+                        decoder_start_channels,
+                        bottle_img_size[0],
+                        bottle_img_size[1],
+                    ),
+                ),
+            )
 
         self.decoder_layers = torch.nn.ModuleList(
             [
@@ -127,33 +194,33 @@ class SemantSegUNet(torch.nn.Module):
             self.head = nnet.modules.components.DualHead(
                 in_channels=decoder_map[0][-1], n_classes=num_classes
             )
+            self.depth_exponents = torch.nn.Parameter(
+                torch.ones(num_classes, requires_grad=True) / 100
+            )
         else:
             self.head = nnet.modules.components.SegmentationHead(
                 in_channels=decoder_map[0][-1], n_classes=num_classes
             )
 
-        if uses_accuracy:
-            # self.accuracy_head = nnet.modules.components.BottomAccuracyHead(
-            #    in_channels=encoder_map[-1][-1]
-            # )
-            self.accuracy_head = nnet.modules.components.AccuracyHead(
-                in_channels=num_classes
+        if autoencode:
+            self.auto_decoder = nnet.modules.components.AutoDecoder(
+                decoder_map=decoder_map,
+                dropout=dropout,
             )
 
     def forward(
         self,
-        x: torch.Tensor,
-        condition: torch.Tensor | None = None,
-        position: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        x = self.input_conv(x)
+        data: datasets.datatypes.SegInputs,
+        autoencode_only: bool = False,
+    ) -> SegModuleOutput:
+        x = self.input_conv(data.input_images.float())
 
         cond = None
         if self.uses_condition:
-            condition = self.cond_embed(condition)
+            condition = self.cond_embed(data.area_probabilities.float())
             cond = condition
         if self.uses_position:
-            position = self.pos_embed(position)
+            position = self.pos_embed(data.position.float())
             cond = position
         if self.uses_condition and self.uses_position:
             cond = condition + position
@@ -176,9 +243,19 @@ class SemantSegUNet(torch.nn.Module):
             for conv in self.encoder_layers[-1]:
                 x = conv(x)
 
-        accuracy = None
-        # if self.uses_accuracy:
-        #    accuracy = self.accuracy_head(x)
+        if self.use_linear_bridge:
+            x = self.linear_bridge(x)
+
+        if self.autoencode:
+            autoencoded_imgs = self.auto_decoder(x)
+            if autoencode_only:
+                return SegModuleOutput(
+                    logits=None,
+                    depth_maps=None,
+                    autoencoded_imgs=autoencoded_imgs,
+                )
+        else:
+            autoencoded_imgs = None
 
         x = self.decoder_layers[-1](x)
 
@@ -193,20 +270,14 @@ class SemantSegUNet(torch.nn.Module):
 
         heads_output = self.head(x)
 
-        outputs = []
-
         if self.uses_depth:
-            outputs.append(heads_output[0])
+            logits, depthmap = heads_output
         else:
-            outputs.append(heads_output)
+            logits = heads_output
+            depthmap = None
 
-        if self.uses_accuracy:
-            accuracy = self.accuracy_head(outputs[0].detach().clone())
-            outputs.append(accuracy)
-
-        if self.uses_depth:
-            outputs.append(heads_output[1])
-
-        if len(outputs) == 1:
-            return outputs[0]
-        return tuple(outputs)
+        return SegModuleOutput(
+            logits=logits,
+            depth_maps=depthmap,
+            autoencoded_imgs=autoencoded_imgs,
+        )

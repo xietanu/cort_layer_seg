@@ -1,3 +1,5 @@
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
 import datasets.datatypes
@@ -32,6 +34,8 @@ class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
         dropout: float = 0.0,
         step: int = 0,
         denoise_model_name: str | None = None,
+        accuracy_model_name: str | None = None,
+        decay_epochs: int = 50,
         **network_kwargs,
     ):
         self.num_classes = num_classes
@@ -42,6 +46,7 @@ class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
         self.dropout = dropout
         self.network_kwargs = network_kwargs
         self.denoise_model_name = denoise_model_name
+        self.accuracy_model_name = accuracy_model_name
 
         self.network = nnet.modules.SemantSegUNet(
             input_channels=1,
@@ -50,13 +55,29 @@ class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
         ).to(self.device)
 
         self.denoise_model = None
+        self.accuracy_model = None
 
         if self.denoise_model_name is not None:
-            self.denoise_model = nnet.models.DenoiseUNetModel.restore(
-                f"models/{self.denoise_model_name}.pth"
-            )
-            self.denoise_model.device = self.device
-            self.denoise_model.network.to(self.device)
+            try:
+                self.denoise_model = nnet.models.DenoiseUNetModel.restore(
+                    f"models/{self.denoise_model_name}.pth"
+                )
+                self.denoise_model.device = self.device
+                self.denoise_model.network.to(self.device)
+            except FileNotFoundError:
+                self.denoise_model = None
+                print("!!! Denoise model not found !!!")
+
+        if self.accuracy_model_name is not None:
+            try:
+                self.accuracy_model = nnet.models.AccuracyModel.restore(
+                    f"models/{self.accuracy_model_name}.pth"
+                )
+                self.accuracy_model.device = self.device
+                self.accuracy_model.network.to(self.device)
+            except FileNotFoundError:
+                self.accuracy_model = None
+                print("!!! Accuracy model not found !!!")
 
         self.optimizer = torch.optim.Adam(
             self.network.parameters(), lr=self.learning_rate
@@ -64,102 +85,139 @@ class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
         # self.scheduler = torch.optim.lr_scheduler.StepLR(
         #    self.optimizer, step_size=163, gamma=0.96
         # )
-        self.scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer, start_factor=1.0, end_factor=0.1, total_iters=163 * 100
+        # self.scheduler = torch.optim.lr_scheduler.LinearLR(
+        #    self.optimizer,
+        #    start_factor=1.0,
+        #    end_factor=0.1,
+        #    total_iters=166 * decay_epochs,
+        # )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=171 * decay_epochs,
+            eta_min=learning_rate * 0.3,
         )
+        # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        #    self.optimizer,
+        #    T_0=5,
+        #    T_mult=1,
+        #    eta_min=learning_rate * 0.1,
+        # )
 
     def train_one_step(
         self,
         inputs: datasets.datatypes.SegInputs,
-        ground_truths: datasets.datatypes.SegGroundTruths,
-    ) -> tuple[float, float, float]:
+        ground_truths: datasets.datatypes.SegGroundTruths | None,
+        step: float | None = None,
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         """Train the model on one step."""
         self.network.train()
         self.optimizer.zero_grad()
 
-        loss, accuracy, acc_err = self._calc_loss_acc(inputs, ground_truths)
+        loss, accuracy = self._calc_loss_acc(inputs, ground_truths)
 
         loss.backward()
 
         self.optimizer.step()
-        self.scheduler.step()
+        if step is not None:
+            # self.scheduler.step(step)
+            self.scheduler.step()
+            self.step += 1
 
-        self.step += 1
-
-        return loss.item(), accuracy, acc_err
+        return loss.detach().cpu(), accuracy
 
     def validate(
         self,
         inputs: datasets.datatypes.SegInputs,
-        ground_truths: datasets.datatypes.SegGroundTruths,
-    ) -> tuple[float, float, float]:
+        ground_truths: datasets.datatypes.SegGroundTruths | None,
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         """Validate the model."""
         self.network.eval()
 
-        loss, accuracy, acc_err = self._calc_loss_acc(inputs, ground_truths)
+        loss, accuracy = self._calc_loss_acc(inputs, ground_truths)
 
-        return loss.item(), accuracy, acc_err
+        return loss.detach().cpu(), accuracy
 
     def _calc_loss_acc(
         self,
         inputs: datasets.datatypes.SegInputs,
-        ground_truths: datasets.datatypes.SegGroundTruths,
-    ) -> tuple[torch.Tensor, float, float]:
+        ground_truths: datasets.datatypes.SegGroundTruths | None,
+    ) -> tuple[nnet.loss.CombinedLoss, float]:
         inputs.to_device(self.device)
-        ground_truths.to_device(self.device)
 
-        raw_outputs = self.network(
-            inputs.input_images.float(),
-            (
-                inputs.area_probabilities.float()
-                if inputs.area_probabilities is not None
-                else None
-            ),
-            inputs.position.float() if inputs.position is not None else None,
-        )
+        raw_outputs = self.network(inputs, autoencode_only=ground_truths is None)
 
-        seg_outputs, acc_outputs = raw_outputs[:2]
+        if ground_truths is not None:
+            label_outputs = torch.argmax(raw_outputs.logits, dim=1)
 
-        label_outputs = torch.argmax(seg_outputs, dim=1)
+            ground_truths.to_device(self.device)
 
-        label_outputs[ground_truths.segmentation.squeeze(1) == self.ignore_index] = (
-            self.ignore_index
-        )
+            label_outputs[
+                ground_truths.segmentation.squeeze(1) == self.ignore_index
+            ] = self.ignore_index
 
-        accuracy = evaluate.mean_dice(
-            label_outputs.detach().cpu(),
-            ground_truths.segmentation.detach().cpu(),
-            n_classes=self.num_classes,
-            ignore_index=self.ignore_index,
-        )
-
-        with torch.no_grad():
-            per_sample_dice = torch.tensor(
-                [
-                    evaluate.f1_score(
-                        label_outputs[None, i],
-                        ground_truths.segmentation[None, i],
-                        self.num_classes,
-                        self.ignore_index,
-                    )
-                    for i in range(len(ground_truths.segmentation))
-                ],
-                device=self.device,
-            )
-
-        if len(raw_outputs) == 3:
-            loss = nnet.loss.seg_acc_depth_loss(
-                raw_outputs, ground_truths, per_sample_dice, self.ignore_index
+            accuracy = evaluate.mean_dice(
+                label_outputs.detach().cpu(),
+                ground_truths.segmentation.detach().cpu(),
+                n_classes=self.num_classes,
+                ignore_index=self.ignore_index,
             )
         else:
-            loss = nnet.loss.seg_acc_loss(
-                raw_outputs, ground_truths, per_sample_dice, self.ignore_index
+            accuracy = 0
+
+        loss = nnet.loss.CombinedLoss()
+
+        if ground_truths is not None and ground_truths.segmentation is not None:
+            segmentation_loss = nnet.loss.tversky_loss(
+                raw_outputs.logits, ground_truths.segmentation, self.ignore_index
+            )
+            loss.add(nnet.protocols.LossType.SEGMENTATION, segmentation_loss)
+
+        if (
+            raw_outputs.depth_maps is not None
+            and ground_truths is not None
+            and ground_truths.depth_maps is not None
+            and ground_truths.segmentation is not None
+        ):
+            depth_loss = nnet.loss.depthmap_loss(
+                raw_outputs.depth_maps,
+                ground_truths.depth_maps,
+                ground_truths.segmentation,
+                self.ignore_index,
+            )
+            loss.add(
+                nnet.protocols.LossType.DEPTH,
+                depth_loss,
+                3,  # / raw_outputs.depth_maps.shape[1],
             )
 
-        with torch.no_grad():
-            acc_err = torch.abs(raw_outputs[1] - per_sample_dice).mean()
+            consistency_loss = nnet.loss.consistency_loss(
+                raw_outputs.logits,
+                raw_outputs.depth_maps,
+                ground_truths.segmentation,
+                self.ignore_index,
+            )
+            loss.add(nnet.protocols.LossType.CONSISTENCY, consistency_loss, 1 / 10)
 
-        return loss, accuracy, acc_err
+        if raw_outputs.autoencoded_imgs is not None:
+            if ground_truths is not None and ground_truths.segmentation is not None:
+                pred = raw_outputs.autoencoded_imgs[
+                    ground_truths.segmentation != self.ignore_index
+                ]
+                gt = inputs.input_images[
+                    ground_truths.segmentation != self.ignore_index
+                ]
+            else:
+                pred = raw_outputs.autoencoded_imgs
+                gt = inputs.input_images
+
+            loss_fn = torch.nn.MSELoss()
+            autoencoder_loss = loss_fn(
+                pred.float(),
+                gt.float(),
+            )
+            loss.add(nnet.protocols.LossType.AUTOENCODE, autoencoder_loss, 10)
+
+        return loss, accuracy
 
     def predict(
         self,
@@ -172,41 +230,46 @@ class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
         inputs.to_device(self.device)
 
         raw_ouputs = self.network(
-            inputs.input_images.float(),
-            (
-                inputs.area_probabilities.float()
-                if inputs.area_probabilities is not None
-                else None
-            ),
-            inputs.position.float() if inputs.position is not None else None,
+            inputs,
         )
 
-        seg_outputs, acc_outputs = raw_ouputs[:2]
+        logits = raw_ouputs.logits.detach().cpu()
 
-        logits = seg_outputs.detach().cpu()
-
-        labels = torch.argmax(seg_outputs, dim=1).detach().cpu().unsqueeze(1)
+        labels = torch.argmax(logits, dim=1).detach().cpu().unsqueeze(1)
 
         denoised_logits = None
         denoised_labels = None
         if self.denoise_model is not None:
-            if (
-                "uses_condition" in self.denoise_model.network_kwargs
-                and self.denoise_model.network_kwargs["uses_condition"]
-            ):
-                denoised_logits, denoised_labels = self.denoise_model.predict(
-                    logits, inputs.area_probabilities.float(), inputs.position.float()
-                )
-            else:
-                denoised_logits, denoised_labels = self.denoise_model.predict(logits)
+            denoised_logits, denoised_labels = self.denoise_model.predict(
+                logits, inputs.area_probabilities.float(), inputs.position.float()
+            )
+            denoised_logits = denoised_logits.detach().cpu()
+            denoised_labels = denoised_labels.detach().cpu()
+        acc_preds = torch.zeros((inputs.input_images.shape[0])).to(self.device)
+
+        if self.accuracy_model is not None:
+            acc_preds = self.accuracy_model.predict(
+                logits, inputs.area_probabilities.float(), inputs.position.float()
+            )
+            if len(acc_preds.shape) == 0:
+                acc_preds = torch.stack([acc_preds]).to(self.device)
 
         return datasets.datatypes.Predictions(
             segmentation=labels,
-            accuracy=acc_outputs.detach().cpu(),
-            depth_maps=(raw_ouputs[2].detach().cpu() if len(raw_ouputs) == 3 else None),
+            accuracy=acc_preds.detach().cpu(),
+            depth_maps=(
+                raw_ouputs.depth_maps.detach().cpu()
+                if raw_ouputs.depth_maps is not None
+                else None
+            ),
             logits=logits,
-            denoised_segementation=denoised_labels.detach().cpu(),
-            denoised_logits=denoised_logits.detach().cpu(),
+            denoised_segementation=denoised_labels,
+            denoised_logits=denoised_logits,
+            autoencoded_img=(
+                raw_ouputs.autoencoded_imgs.detach().cpu()
+                if raw_ouputs.autoencoded_imgs is not None
+                else None
+            ),
         )
 
     def save(self, path: str):
@@ -222,6 +285,7 @@ class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
             "denoise_model_name": self.denoise_model_name,
+            "accuracy_model_name": self.accuracy_model_name,
         }
         torch.save(checkpoint, path)
 
@@ -236,6 +300,7 @@ class SemantSegUNetModel(nnet.protocols.SegModelProtocol):
             ignore_index=checkpoint["ignore_index"],
             step=checkpoint["step"],
             denoise_model_name=checkpoint["denoise_model_name"],
+            accuracy_model_name=checkpoint["accuracy_model_name"],
             **checkpoint["network_kwargs"],
         )
         model.network.load_state_dict(checkpoint["network"])

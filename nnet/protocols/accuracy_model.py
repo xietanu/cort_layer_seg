@@ -14,6 +14,8 @@ class AccuracyModelProtocol(Protocol):
         self,
         logits: torch.Tensor,
         gt_acc: torch.Tensor,
+        probs: torch.Tensor | None = None,
+        locations: torch.Tensor | None = None,
     ) -> tuple[float, float]:  # type: ignore
         """Train the model on one step."""
 
@@ -31,11 +33,15 @@ class AccuracyModelProtocol(Protocol):
         self,
         logits: torch.Tensor,
         gt_acc: torch.Tensor,
+        probs: torch.Tensor | None = None,
+        locations: torch.Tensor | None = None,
     ) -> tuple[float, float]:  # type: ignore
         """Validate the model."""
 
     def predict(
         self,
         logits: torch.Tensor,
+        probs: torch.Tensor | None = None,
+        locations: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Predict the outputs for given outputs."""
