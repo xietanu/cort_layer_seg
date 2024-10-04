@@ -2,7 +2,7 @@ import datasets
 
 
 def main():
-    datasets.create_folds("data/preprocessed")
+    datasets.create_alt_folds("data/preprocessed")
 
 
 if __name__ == "__main__":

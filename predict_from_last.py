@@ -27,7 +27,11 @@ def main():
         ]
 
     fold_data = datasets.load_fold(
-        fold=fold, condition=condition, use_position=config["positional"]
+        fold=fold,
+        condition=condition,
+        use_position=config["positional"],
+        batch_size=4,
+        padded_size=(256, 128),
     )
 
     experiments.predict_from_model(

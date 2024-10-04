@@ -42,8 +42,9 @@ def main():
         use_position=config["positional"],
         perc_siibra=0.0,
         roll=0.75,
-        use_transforms=False,
+        use_transforms=True,
         use_prev_seg_with_siibra=False,
+        padded_size=(256, 128),
     )
     siibra_fold_data = datasets.load_fold(
         fold=fold,
@@ -53,6 +54,7 @@ def main():
         roll=0.75,
         use_transforms=False,
         use_prev_seg_with_siibra=False,
+        padded_size=(256, 128),
     )
 
     model = nnet.models.SemantSegUNetModel.restore(TEMP_MODEL)
@@ -95,6 +97,7 @@ def get_seg_output_for_loader(
             section_id=batch_info[1].detach().cpu().numpy().tolist(),
             patch_id=batch_info[2].detach().cpu().numpy().tolist(),
             fold=batch_info[3].detach().cpu().numpy().tolist(),
+            is_corner_patch=batch_info[4].detach().cpu().numpy().tolist(),
         )
         batch_inputs = datasets.datatypes.SegInputs(*batch_inputs)
         batch_gt = datasets.datatypes.SegGroundTruths(*batch_gt)
