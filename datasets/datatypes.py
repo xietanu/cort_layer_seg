@@ -16,6 +16,7 @@ class PatchInfos:
     section_id: list[int]
     patch_id: list[int]
     fold: list[int]
+    is_corner_patch: list[bool]
 
     def __add__(self, other):
         if not isinstance(other, PatchInfos):
@@ -26,6 +27,7 @@ class PatchInfos:
             section_id=self.section_id + other.section_id,
             patch_id=self.patch_id + other.patch_id,
             fold=self.fold + other.fold,
+            is_corner_patch=self.is_corner_patch + other.is_corner_patch,
         )
 
     def save(self, folder: str):
@@ -36,6 +38,7 @@ class PatchInfos:
                     "section_id": self.section_id,
                     "patch_id": self.patch_id,
                     "fold": self.fold,
+                    "is_corner_patch": self.is_corner_patch,
                 },
                 f,
             )
@@ -49,6 +52,7 @@ class PatchInfos:
             section_id=data["section_id"],
             patch_id=data["patch_id"],
             fold=data["fold"],
+            is_corner_patch=data["is_corner_patch"],
         )
 
 
@@ -83,6 +87,18 @@ class SegInputs:
             self.area_probabilities = self.area_probabilities.to(device)
         if self.position is not None:
             self.position = self.position.to(device)
+
+    def cpu(self):
+        self.to_device(torch.device("cpu"))
+        return self
+
+    def detach(self):
+        self.input_images = self.input_images.detach()
+        if self.area_probabilities is not None:
+            self.area_probabilities = self.area_probabilities.detach()
+        if self.position is not None:
+            self.position = self.position.detach()
+        return self
 
     def __add__(self, other):
         if not isinstance(other, SegInputs):
@@ -160,6 +176,18 @@ class SegGroundTruths:
         if self.prev_segmentation is not None:
             self.prev_segmentation = self.prev_segmentation.to(device)
 
+    def cpu(self):
+        self.to_device(torch.device("cpu"))
+        return self
+
+    def detach(self):
+        self.segmentation = self.segmentation.detach()
+        if self.depth_maps is not None:
+            self.depth_maps = self.depth_maps.detach()
+        if self.prev_segmentation is not None:
+            self.prev_segmentation = self.prev_segmentation.detach()
+        return self
+
     def __add__(self, other):
         if not isinstance(other, SegGroundTruths):
             raise ValueError("other must be SegGroundTruths")
@@ -214,6 +242,7 @@ class Predictions:
     depth_maps: torch.Tensor | None = None
     denoised_segementation: torch.Tensor | None = None
     denoised_logits: torch.Tensor | None = None
+    autoencoded_img: torch.Tensor | None = None
 
     def __post_init__(self):
         if (
@@ -251,6 +280,26 @@ class Predictions:
             self.denoised_segementation = self.denoised_segementation.to(device)
         if self.denoised_logits is not None:
             self.denoised_logits = self.denoised_logits.to(device)
+        if self.autoencoded_img is not None:
+            self.autoencoded_img = self.autoencoded_img.to(device)
+
+    def cpu(self):
+        self.to_device(torch.device("cpu"))
+        return self
+
+    def detach(self):
+        self.segmentation = self.segmentation.detach()
+        self.logits = self.logits.detach()
+        self.accuracy = self.accuracy.detach()
+        if self.depth_maps is not None:
+            self.depth_maps = self.depth_maps.detach()
+        if self.denoised_segementation is not None:
+            self.denoised_segementation = self.denoised_segementation.detach()
+        if self.denoised_logits is not None:
+            self.denoised_logits = self.denoised_logits.detach()
+        if self.autoencoded_img is not None:
+            self.autoencoded_img = self.autoencoded_img.detach()
+        return self
 
     def __add__(self, other):
         if not isinstance(other, Predictions):
@@ -277,6 +326,11 @@ class Predictions:
                 if self.denoised_logits is not None
                 else None
             ),
+            autoencoded_img=(
+                torch.cat([self.autoencoded_img, other.autoencoded_img], dim=0)
+                if self.autoencoded_img is not None
+                else None
+            ),
         )
 
     def save(self, folder: str):
@@ -292,6 +346,8 @@ class Predictions:
             )
         if self.denoised_logits is not None:
             torch.save(self.denoised_logits, f"{folder}/pred_denoised_logits.pt")
+        if self.autoencoded_img is not None:
+            torch.save(self.autoencoded_img, f"{folder}/pred_autoencoded_img.pt")
 
     @classmethod
     def load(cls, folder: str):
@@ -313,6 +369,11 @@ class Predictions:
             if "pred_denoised_logits.pt" in os.listdir(folder)
             else None
         )
+        autoencoded_img = (
+            torch.load(f"{folder}/pred_autoencoded_img.pt")
+            if "pred_autoencoded_img.pt" in os.listdir(folder)
+            else None
+        )
 
         return Predictions(
             segmentation=segmentation,
@@ -321,6 +382,7 @@ class Predictions:
             depth_maps=depth_maps,
             denoised_segementation=denoised_segmentation,
             denoised_logits=denoised_logits,
+            autoencoded_img=autoencoded_img,
         )
 
     def to_list(self):
@@ -338,6 +400,11 @@ class Predictions:
                 denoised_logits=(
                     self.denoised_logits[i]
                     if self.denoised_logits is not None
+                    else None
+                ),
+                autoencoded_img=(
+                    self.autoencoded_img[i]
+                    if self.autoencoded_img is not None
                     else None
                 ),
             )
@@ -367,6 +434,7 @@ class Prediction:
     depth_map: torch.Tensor | None = None
     denoised_segmentation: torch.Tensor | None = None
     denoised_logits: torch.Tensor | None = None
+    autoencoded_img: torch.Tensor | None = None
 
 
 @dataclass
@@ -385,6 +453,7 @@ class PatchDataItems:
             section_id=self.patch_info.section_id[idx],
             patch_id=self.patch_info.patch_id[idx],
             fold=self.patch_info.fold[idx],
+            is_corner_patch=self.patch_info.is_corner_patch[idx],
             data_input=DataInput(
                 input_image=self.data_inputs.input_images[idx],
                 area_probability=(
@@ -429,6 +498,11 @@ class PatchDataItems:
                     denoised_logits=(
                         self.predictions.denoised_logits[idx]
                         if self.predictions.denoised_logits is not None
+                        else None
+                    ),
+                    autoencoded_img=(
+                        self.predictions.autoencoded_img[idx]
+                        if self.predictions.autoencoded_img is not None
                         else None
                     ),
                 )
@@ -477,6 +551,8 @@ class PatchDataItems:
         )
 
     def sample(self, n_data_items):
+        if n_data_items > len(self):
+            n_data_items = len(self)
         indices = np.random.choice(len(self), n_data_items, replace=False)
         return [self[idx] for idx in indices]
 
@@ -504,6 +580,11 @@ class PatchDataItems:
                 self.patch_info.patch_id[i] for i in range(len(self)) if keep_mask[i]
             ],
             fold=[self.patch_info.fold[i] for i in range(len(self)) if keep_mask[i]],
+            is_corner_patch=[
+                self.patch_info.is_corner_patch[i]
+                for i in range(len(self))
+                if keep_mask[i]
+            ],
         )
         data_inputs = SegInputs(
             input_images=self.data_inputs.input_images[keep_mask],
@@ -551,6 +632,11 @@ class PatchDataItems:
                     if self.predictions.denoised_logits is not None
                     else None
                 ),
+                autoencoded_img=(
+                    self.predictions.autoencoded_img[keep_mask]
+                    if self.predictions.autoencoded_img is not None
+                    else None
+                ),
             )
             if self.predictions is not None
             else None
@@ -562,6 +648,22 @@ class PatchDataItems:
             predictions=predictions,
         )
 
+    def detach(self):
+        self.data_inputs.detach()
+        self.ground_truths.detach()
+        if self.predictions is not None:
+            self.predictions.detach()
+
+        return self
+
+    def cpu(self):
+        self.data_inputs.cpu()
+        self.ground_truths.cpu()
+        if self.predictions is not None:
+            self.predictions.cpu()
+
+        return self
+
 
 @dataclass
 class PatchDataItem:
@@ -569,6 +671,7 @@ class PatchDataItem:
     section_id: int
     patch_id: int
     fold: int
+    is_corner_patch: bool
     data_input: DataInput
     ground_truth: GroundTruth
     prediction: Prediction | None = None
@@ -599,6 +702,8 @@ class PatchDataItem:
 
     @property
     def pred_denoised_segmentation(self):
+        if self.prediction.denoised_segmentation is None:
+            return None
         return (
             cort.manip.unpad_img(
                 self.prediction.denoised_segmentation, self.ground_truth.segmentation
@@ -609,9 +714,53 @@ class PatchDataItem:
 
     @property
     def existing_cort_layers(self):
+        if self.ground_truth.prev_segmentation is None:
+            return None
         return (
             cort.manip.unpad_img(
                 self.ground_truth.prev_segmentation, self.ground_truth.segmentation
+            )
+            .squeeze()
+            .numpy()
+        )
+
+    @property
+    def autoencoded_img(self):
+        if (
+            self.prediction.autoencoded_img is None
+            or self.ground_truth.segmentation is None
+        ):
+            return None
+        return (
+            cort.manip.unpad_img(
+                self.prediction.autoencoded_img, self.ground_truth.segmentation
+            )
+            .squeeze()
+            .numpy()
+        )
+
+    @property
+    def gt_depth_map(self):
+        if (
+            self.ground_truth.depth_map is None
+            or self.ground_truth.segmentation is None
+        ):
+            return None
+        return (
+            cort.manip.unpad_img(
+                self.ground_truth.depth_map, self.ground_truth.segmentation
+            )
+            .squeeze()
+            .numpy()
+        )
+
+    @property
+    def pred_depth_map(self):
+        if self.prediction.depth_map is None or self.ground_truth.segmentation is None:
+            return None
+        return (
+            cort.manip.unpad_img(
+                self.prediction.depth_map, self.ground_truth.segmentation
             )
             .squeeze()
             .numpy()

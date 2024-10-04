@@ -81,33 +81,40 @@ def add_perlin_noise(x: torch.Tensor) -> torch.Tensor:
     return torch.clamp(x + (amount * noise_section)[None, :, :], 0, 1)
 
 
+RANDOM_ERASE = transforms.RandomErasing(
+    p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0
+)
+
 AUGMENTATIONS = transforms.Compose(
     [
         transforms.ToTensor(),
         transforms.RandomHorizontalFlip(p=0.5),
         RANDOM_ROTATION,
-        RANDOM_PERSPECTIVE,
+        # RANDOM_PERSPECTIVE,
         ELASTIC_TRANSFORM,
-        # RANDOM_CROP,
+        ## RANDOM_CROP,
     ]
 )
+
 
 DENOISE_AUGMENTATIONS = transforms.Compose(
     [
         transforms.RandomHorizontalFlip(p=0.5),
         RANDOM_ROTATION,
-        # RANDOM_PERSPECTIVE,
-        # ELASTIC_TRANSFORM,
-        # RANDOM_CROP,
+        ## RANDOM_PERSPECTIVE,
+        ## ELASTIC_TRANSFORM,
+        ## RANDOM_CROP,
     ]
 )
 
 
 AUGMENTATIONS_IMG_ONLY = transforms.Compose(
     [
+        transforms.ToTensor(),
         GAUSSIAN_BLUR,
-        # transforms.ColorJitter(brightness=0.1, contrast=0.1),
-        # ADJUST_GAMMA,
+        ## transforms.ColorJitter(brightness=0.1, contrast=0.1),
+        ## ADJUST_GAMMA,
         transforms.Lambda(add_perlin_noise),
+        # RANDOM_ERASE,
     ]
 )

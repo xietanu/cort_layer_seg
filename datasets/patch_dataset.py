@@ -1,4 +1,7 @@
+import cv2
+import matplotlib.pyplot as plt
 import numpy as np
+import scipy
 import torch
 import torch.utils.data
 import torchvision
@@ -46,7 +49,13 @@ class PatchDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         patch = self.patches[idx]
 
-        if np.random.rand() < self.percent_siibra and patch.siibra_imgs is not None:
+        has_gt = patch.mask is not None
+
+        if (
+            has_gt
+            and np.random.rand() < self.percent_siibra
+            and patch.siibra_imgs is not None
+        ):
             image = patch.siibra_imgs.image
             label = (
                 patch.siibra_imgs.mask
@@ -57,9 +66,43 @@ class PatchDataset(torch.utils.data.Dataset):
             prev_mask = patch.siibra_imgs.existing_cort_layers
         else:
             image = patch.image
-            label = patch.mask
-            depth = patch.depth_maps
-            prev_mask = np.zeros_like(label)
+            label = patch.mask if has_gt else np.zeros_like(image)
+            depth = (
+                patch.depth_maps
+                if has_gt
+                else np.zeros((image.shape[0], image.shape[1], 2))
+            )
+            prev_mask = np.zeros_like(image)
+
+        image = image.astype(np.float32)
+        image = (image - image.min()) / (image.max() - image.min())
+
+        if self.roll != 0.0:
+            for i in range(np.random.randint(0, 6)):
+                blood_vessel = gen_blood_vessel()
+
+                borders = patch.borders[:, :, 1:].sum(axis=2)
+
+                probs = borders.flatten() / borders.sum()
+                pos = np.random.choice(len(probs), p=probs)
+                x_pos = pos % borders.shape[1]
+                y_pos = pos // borders.shape[1]
+
+                x_pos += np.random.randint(-5, 5) - blood_vessel.shape[1] // 2
+                y_pos += np.random.randint(-5, 5) - blood_vessel.shape[0] // 2
+
+                x_pos = np.clip(x_pos, 0, image.shape[1] - blood_vessel.shape[1])
+                y_pos = np.clip(y_pos, 0, image.shape[0] - blood_vessel.shape[0])
+
+                image[
+                    y_pos : y_pos + blood_vessel.shape[0],
+                    x_pos : x_pos + blood_vessel.shape[1],
+                ] += blood_vessel
+                image = np.clip(image, 0, 1)
+
+        if self.img_transform is not None:
+            image = self.img_transform(image)
+            image = image.numpy().transpose(1, 2, 0)
 
         image, label, depth, prev_mask = [
             center_pad_to_size(arr, self.padded_size)
@@ -67,7 +110,6 @@ class PatchDataset(torch.utils.data.Dataset):
         ]
 
         image_label = np.stack((image, label, prev_mask), axis=-1)
-
         image_label_depth = np.concatenate((image_label, depth), axis=-1)
 
         transformed_image_and_label = self.transform(image_label_depth)
@@ -116,17 +158,19 @@ class PatchDataset(torch.utils.data.Dataset):
 
         label = label.round().long()
 
-        mask = label == cort.constants.PADDING_MASK_VALUE
+        if has_gt:
+            mask = label == cort.constants.PADDING_MASK_VALUE
+        else:
+            mask = image == cort.constants.PADDING_MASK_VALUE
 
         depth[mask.expand_as(depth)] = 0
         image[image == cort.constants.PADDING_MASK_VALUE] = 0
 
-        if self.img_transform is not None:
-            image = self.img_transform(image)
-
         inputs = [image]
         if self.condition is not None:
             condition = self.condition(patch)
+            if torch.any(torch.isnan(condition)):
+                condition = torch.zeros_like(condition)
             inputs.append(condition)
         else:
             inputs.append(torch.tensor(0))
@@ -136,7 +180,13 @@ class PatchDataset(torch.utils.data.Dataset):
             inputs.append(torch.tensor(0))
 
         return (
-            (patch.brain_area, patch.section_id, patch.patch_id, self.fold),
+            (
+                patch.brain_area,
+                patch.section_id,
+                patch.patch_id,
+                self.fold,
+                patch.is_corner_patch,
+            ),
             tuple(inputs),
             (label, depth, prev_mask),
         )
@@ -147,13 +197,21 @@ def find_min_padding_size(
 ) -> tuple[int, int]:
     max_width = np.max(
         [
-            max(patch.image.shape[1], patch.siibra_imgs.image.shape[1])
+            (
+                max(patch.image.shape[1], patch.siibra_imgs.image.shape[1])
+                if patch.siibra_imgs is not None
+                else patch.image.shape[1]
+            )
             for patch in patches
         ]
     )
     max_height = np.max(
         [
-            max(patch.image.shape[0], patch.siibra_imgs.image.shape[0])
+            (
+                max(patch.image.shape[0], patch.siibra_imgs.image.shape[0])
+                if patch.siibra_imgs is not None
+                else patch.image.shape[0]
+            )
             for patch in patches
         ]
     )
@@ -173,6 +231,8 @@ def pad_to_size(arr: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
 
 
 def center_pad_to_size(arr: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    if arr is None or len(arr.shape) == 0:
+        return None
     if arr.ndim == 2:
         arr = arr[:, :, None]
     padded = np.full(
@@ -187,6 +247,8 @@ def center_pad_to_size(arr: np.ndarray, size: tuple[int, int]) -> np.ndarray:
 
 
 def center_pad_to_size_tensor(arr: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
+    if arr is None or len(arr.shape) == 0:
+        return None
     if arr.ndim == 2:
         arr = arr[None, :, :]
     padded = torch.full(
@@ -200,3 +262,39 @@ def center_pad_to_size_tensor(arr: torch.Tensor, size: tuple[int, int]) -> torch
         :, h_offset : h_offset + arr.shape[1], w_offset : w_offset + arr.shape[2]
     ] = arr
     return padded
+
+
+def gen_blood_vessel(max_size=12):
+    line = scipy.stats.norm.pdf(np.linspace(-2, 2, max_size), 0, 1)
+    line = line / line.max()
+    blood_vessel = line[:, np.newaxis] * line[np.newaxis, :]
+
+    if np.random.rand() < 0.5:
+        inner = scipy.stats.norm.pdf(np.linspace(-3, 3, max_size), 0, 1)
+        inner = 1.25 * inner / inner.max()
+        blood_vessel -= inner[:, np.newaxis] * inner[np.newaxis, :]
+        blood_vessel *= 2.5
+
+    if np.random.rand() < 0.5:
+        blood_vessel *= -1
+
+    blood_vessel *= np.random.uniform(0.3, 0.6)
+
+    x_scale = np.random.uniform(0.25, 1)
+    y_scale = np.random.uniform(0.25, 1)
+
+    resized = cv2.resize(
+        blood_vessel, (0, 0), fx=x_scale, fy=y_scale, interpolation=cv2.INTER_LINEAR
+    )
+
+    rot_angle = np.random.uniform(0, 2 * np.pi)
+
+    rotated = cv2.warpAffine(
+        resized,
+        cv2.getRotationMatrix2D(
+            (resized.shape[0] // 2, resized.shape[1] // 2), rot_angle, 1
+        ),
+        (max_size, max_size),
+        borderValue=0,
+    )
+    return rotated

@@ -20,3 +20,6 @@ class Fold:
     test_dataloader: torch.utils.data.DataLoader
     siibra_test_dataset: torch.utils.data.Dataset
     siibra_test_dataloader: torch.utils.data.DataLoader
+    random_dataloader: torch.utils.data.DataLoader | None = None
+    gaussian_dataloader: torch.utils.data.DataLoader | None = None
+    synth_dataloader: torch.utils.data.DataLoader | None = None
