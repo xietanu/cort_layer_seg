@@ -12,11 +12,10 @@ import cort.depth
 
 
 @dataclass
-class CorticalPatch:
+class MaskCorticalPatch:
     """A cortical image patch."""
 
-    image: np.ndarray
-    mask: np.ndarray | None
+    mask: np.ndarray
     inplane_resolution_micron: float
     section_thickness_micron: float
     brain_id: str
@@ -29,14 +28,9 @@ class CorticalPatch:
     region_probs: np.ndarray
     borders: np.ndarray = None
     depth_maps: np.ndarray = None
-    siibra_imgs: cort.SiibraImages | None = None
-    is_corner_patch: bool = False
 
     def __post_init__(self):
         """Post-initialization."""
-        if self.mask is not None and self.image.shape != self.mask.shape:
-            raise ValueError("Image and mask must have the same shape.")
-
         if self.borders is None and self.mask is not None:
             self.borders = cort.depth.find_borders(self.mask)
 
@@ -47,7 +41,7 @@ class CorticalPatch:
 
     def __eq__(self, other):
         """Check if two patches are equal."""
-        if not isinstance(other, CorticalPatch):
+        if not isinstance(other, MaskCorticalPatch):
             return False
         return (
             self.inplane_resolution_micron == other.inplane_resolution_micron
@@ -64,31 +58,12 @@ class CorticalPatch:
     @property
     def shape(self):
         """Return the shape of the patch."""
-        return self.image.shape
+        return self.mask.shape
 
     @property
     def name(self):
         """Return the name of the patch."""
         return f"{self.brain_id}-{self.brain_area}-{self.section_id}-{self.patch_id}"
-
-    def display(self, ax=None, show_padding=False):
-        """Display the patch."""
-        new_ax = cort.display.display_patch(
-            self.image if show_padding else self.image_without_padding,
-            self.mask if show_padding else self.mask_without_padding,
-            ax=ax,
-        )
-        new_ax.set_title(self.name)
-        if ax is None:
-            plt.show()
-        return ax
-
-    @property
-    def image_without_padding(self):
-        """Return the image without padded."""
-        unpadded_width = np.sum(self.mask[0, :] != cort.constants.PADDING_MASK_VALUE)
-        unpadded_height = np.sum(self.mask[:, 0] != cort.constants.PADDING_MASK_VALUE)
-        return self.image[:unpadded_height, :unpadded_width]
 
     @property
     def mask_without_padding(self):
@@ -103,40 +78,21 @@ class CorticalPatch:
 
         images_stack = np.concatenate(
             [
-                self.image[:, :, None],
-                (
-                    self.mask[:, :, None]
-                    if self.mask is not None
-                    else np.zeros_like(self.image)[:, :, None]
-                ),
+                self.mask[:, :, None],
                 # self.border_flow_map[:, :, None],
                 (
                     self.borders
                     if self.borders is not None
-                    else np.zeros_like(self.image)[:, :, None]
+                    else np.zeros_like(self.mask)[:, :, None]
                 ),
                 (
                     self.depth_maps
                     if self.depth_maps is not None
-                    else np.zeros_like(self.image)[:, :, None]
+                    else np.zeros_like(self.mask)[:, :, None]
                 ),
             ],
             axis=2,
         )
-
-        siibra_stack = None
-        if self.siibra_imgs is not None:
-            siibra_stack = np.concatenate(
-                [
-                    self.siibra_imgs.image[:, :, None],
-                    self.siibra_imgs.mask[:, :, None],
-                    self.siibra_imgs.matched_image[:, :, None],
-                    self.siibra_imgs.affine_matched_image[:, :, None],
-                    self.siibra_imgs.affine_mask[:, :, None],
-                    self.siibra_imgs.depth_maps,
-                ],
-                axis=2,
-            )
 
         other_data = {
             "inplane_resolution_micron": self.inplane_resolution_micron,
@@ -153,15 +109,10 @@ class CorticalPatch:
             "n_depth_maps": (
                 self.depth_maps.shape[2] if self.depth_maps is not None else 1
             ),
-            "is_corner_patch": "True" if self.is_corner_patch else "False",
         }
 
         np.save(f"{folder}/{name}_images.npy", images_stack)
-        if siibra_stack is not None:
-            np.save(f"{folder}/{name}_siibra.npy", siibra_stack)
-            np.save(
-                f"{folder}/{name}_prev_mask.npy", self.siibra_imgs.existing_cort_layers
-            )
+
         with open(f"{folder}/{name}_data.json", "w") as f:
             json.dump(other_data, f)
 
@@ -172,30 +123,16 @@ class CorticalPatch:
             other_data = json.load(f)
 
         images_stack = np.load(f"{folder}/{name}_images.npy")
-        mask = images_stack[:, :, 1]
-        borders = images_stack[:, :, 2 : 2 + other_data["n_borders"]]
-        depth_maps = images_stack[:, :, 2 + other_data["n_borders"] :]
+        mask = images_stack[:, :, 0]
+        borders = images_stack[:, :, 1 : 1 + other_data["n_borders"]]
+        depth_maps = images_stack[:, :, 1 + other_data["n_borders"] :]
 
         if np.all(mask == 0):
             mask = None
             borders = None
             depth_maps = None
-        siibra_imgs = None
-        if os.path.exists(f"{folder}/{name}_siibra.npy"):
-            siibra_stack = np.load(f"{folder}/{name}_siibra.npy")
-            prev_mask = np.load(f"{folder}/{name}_prev_mask.npy")
-            siibra_imgs = cort.SiibraImages(
-                image=siibra_stack[:, :, 0],
-                existing_cort_layers=prev_mask,
-                mask=siibra_stack[:, :, 1],
-                matched_image=siibra_stack[:, :, 2],
-                depth_maps=siibra_stack[:, :, 5:],
-                affine_matched_image=siibra_stack[:, :, 3],
-                affine_mask=siibra_stack[:, :, 4],
-            )
 
         return cls(
-            image=images_stack[:, :, 0],
             mask=mask,
             borders=borders,
             depth_maps=depth_maps,
@@ -209,6 +146,4 @@ class CorticalPatch:
             y=other_data["y"],
             z=other_data["z"],
             region_probs=np.array(other_data["region_probs"]),
-            siibra_imgs=siibra_imgs,
-            is_corner_patch=other_data["is_corner_patch"] == "True",
         )

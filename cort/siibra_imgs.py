@@ -34,14 +34,16 @@ class SiibraImages:
 
     def __post_init__(self):
         self.image = (self.image - np.min(self.image)) / (
-            np.max(self.image) - np.min(self.image)
+            np.max(self.image) - np.min(self.image) + 1e-6
         )
         self.matched_image = (self.matched_image - np.min(self.matched_image)) / (
-            np.max(self.matched_image) - np.min(self.matched_image)
+            np.max(self.matched_image) - np.min(self.matched_image) + 1e-6
         )
         self.affine_matched_image = (
             self.affine_matched_image - np.min(self.affine_matched_image)
-        ) / (np.max(self.affine_matched_image) - np.min(self.affine_matched_image))
+        ) / (
+            np.max(self.affine_matched_image) - np.min(self.affine_matched_image) + 1e-6
+        )
         if np.all(self.mask == cort.constants.PADDING_MASK_VALUE):
             self.use_affine()
 

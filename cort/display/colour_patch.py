@@ -4,11 +4,14 @@ import cv2
 import cort
 
 
-def colour_patch(patch_img, patch_mask) -> np.ndarray:
+def colour_patch(patch_img, patch_mask, normalize=True) -> np.ndarray:
     img = np.stack([patch_img, patch_img, patch_img], axis=-1)
-    img = ((img - np.min(img)) / (np.max(img) - np.min(img) + 1e-6) * 255).astype(
-        np.uint8
-    )
+    if normalize:
+        img = ((img - np.min(img)) / (np.max(img) - np.min(img) + 1e-6) * 255).astype(
+            np.uint8
+        )
+    elif np.max(img) <= 1:
+        img = (img * 255).astype(np.uint8)
 
     for i, colour in enumerate(cort.constants.COLOURS):
         img[patch_mask == i] = (

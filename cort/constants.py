@@ -1,13 +1,50 @@
+# COLOURS = [
+#    (255, 255, 255), # White, 0
+#    (0, 115, 180), # Dark Blue, I
+#    (223, 145, 0), # Orange, II
+#    (0, 160, 116), # Green, III
+#    (214, 94, 0), # Red, IV
+#    (205, 121, 189), # Pink, V
+#    (203, 146, 97), # Brown, VI
+#    (255, 255, 255), # White, WM
+#    (0, 0, 0) # Black, Padding
+# ]
+
+SUMMER_RED = (217, 38, 83)
+SUMMER_GREEN = (64, 191, 64)
+SUMMER_YELLOW = (230, 202, 25)
+SUMMER_PURPLE = (125, 64, 191)
+SUMMER_BLUE = (38, 136, 217)
+SUMMER_ORANGE = (230, 117, 25)
+SUMMER_CYAN = (51, 204, 166)
+SUMMER_YELLOW_GREEN = (163, 210, 45)
+SUMMER_WHITE = (235, 231, 224)
+SUMMER_PERIWINKLE = (51, 76, 204)
+SUMMER_BROWN = (163, 82, 41)
+
+LAZY_WHITE = (237, 233, 222)
+LAZY_RED = (186, 71, 92)
+LAZY_GREEN = (103, 159, 60)
+LAZY_YELLOW = (197, 184, 76)
+LAZY_PURPLE = (110, 77, 179)
+LAZY_BLUE = (84, 144, 196)
+LAZY_ORANGE = (194, 122, 71)
+LAZY_CYAN = (77, 175, 179)
+LAZY_YELLOW_GREEN = (148, 165, 64)
+LAZY_PERIWINKLE = (161, 146, 200)
+LAZY_BROWN = (182, 142, 84)
+LAZY_GUNMETAL = (190, 200, 200)
+
 COLOURS = [
-    (255, 255, 255), # White, 0
-    (0, 115, 180), # Dark Blue, I
-    (223, 145, 0), # Orange, II
-    (0, 160, 116), # Green, III
-    (214, 94, 0), # Red, IV
-    (205, 121, 189), # Pink, V
-    (203, 146, 97), # Brown, VI
-    (255, 255, 255), # White, WM
-    (0, 0, 0) # Black, Padding
+    LAZY_WHITE,  # White, 0
+    LAZY_BLUE,
+    LAZY_ORANGE,
+    LAZY_YELLOW,
+    LAZY_RED,
+    LAZY_GREEN,
+    LAZY_BROWN,
+    LAZY_GUNMETAL,  # WM
+    (0, 0, 0),  # Black, Padding
 ]
 
 PADDING_MASK_VALUE = 8
