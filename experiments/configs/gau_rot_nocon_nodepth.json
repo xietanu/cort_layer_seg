@@ -2,8 +2,8 @@
   "base_model": "unet",
   "conditional": true,
   "positional": true,
-  "lr": 0.0005,
-  "decay_epochs": 100,
+  "lr": 0.00005,
+  "decay_epochs": 50,
   "dataset_config": {"condition": "pmap"},
   "denoise_model_name": "denoise",
   "accuracy_model_name": "acc_model",
@@ -13,6 +13,7 @@
     "dropout":0.0,
     "uses_depth": false,
     "use_linear_bridge": false,
+    "autoencode": false,
     "embed_dim": 120,
     "hidden_embed_dim":32
   }

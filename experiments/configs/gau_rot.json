@@ -2,8 +2,8 @@
   "base_model": "unet",
   "conditional": true,
   "positional": true,
-  "lr": 0.0005,
-  "decay_epochs": 100,
+  "lr": 0.00005,
+  "decay_epochs": 50,
   "dataset_config": {"condition": "pmap"},
   "denoise_model_name": "denoise",
   "accuracy_model_name": "acc_model",
@@ -11,8 +11,9 @@
     "encoder_map": [[32,32,32],[32,64,64],[64,128,128],[128,256,256],[256,512,512]],
     "decoder_map": [[64,32,32],[128,64,64],[256,128,128],[512,256,256],[512,512]],
     "dropout":0.0,
-    "uses_depth": false,
+    "uses_depth": true,
     "use_linear_bridge": false,
+    "autoencode": false,
     "embed_dim": 120,
     "hidden_embed_dim":32
   }

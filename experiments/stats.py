@@ -128,3 +128,18 @@ def calc_f1_by_brain_area_and_class(
     )
 
     return f1_scores
+
+
+def calc_per_pixel_accuracy(
+    results: datasets.datatypes.PatchDataItems, denoised: bool = False
+) -> float:
+
+    return evaluate.per_pixel_accuracy(
+        (
+            results.predictions.segmentation.squeeze(1)
+            if not denoised
+            else results.predictions.denoised_segementation.squeeze(1)
+        ),
+        results.ground_truths.segmentation.squeeze(1),
+        ignore_index=cort.constants.PADDING_MASK_VALUE,
+    )
